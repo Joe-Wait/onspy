@@ -208,16 +208,6 @@ def plot_weekly_deaths(data, title="Weekly Deaths by Geography", figsize=(14, 7)
             linewidth=1.5,
         )
 
-        # Add scattered points for the actual data points (optional)
-        # Uncomment if you want to see individual data points
-        # ax.scatter(
-        #     group["WeekDate"],
-        #     group["v4_1"],
-        #     color=colors[i],
-        #     s=15,
-        #     alpha=0.4,
-        # )
-
     # Set x-axis date formatting
     from matplotlib.dates import DateFormatter, MonthLocator, YearLocator
 
@@ -225,18 +215,14 @@ def plot_weekly_deaths(data, title="Weekly Deaths by Geography", figsize=(14, 7)
     ax.xaxis.set_major_locator(YearLocator())
     ax.xaxis.set_minor_locator(MonthLocator())
 
-    # Format the date display on x-axis
     ax.xaxis.set_major_formatter(DateFormatter("%Y"))
 
-    # Create a clean, readable legend
     ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1, 1))
 
-    # Set labels and title
     ax.set_xlabel("Date")
     ax.set_ylabel("Number of Deaths")
     ax.set_title(title)
 
-    # Add grid for better readability
     ax.grid(True, alpha=0.3)
     plt.xticks(rotation=45)
     plt.tight_layout()
@@ -272,13 +258,13 @@ def main():
             # Save the plot
             if fig is not None:
                 output_file = "weekly_deaths_by_geography.png"
-                plt.savefig(output_file, dpi=300)  # Higher DPI for better quality
+                plt.savefig(output_file, dpi=300)
                 print(f"\nPlot saved to: {output_file}")
 
-                # Show the plot (comment this out if running in a non-interactive environment)
+                # Show the plot
                 plt.show()
 
-                # Also create a plot for each individual geography for better clarity
+                # Also create a plot for each individual geography
                 print("\nCreating individual plots for each geography...")
 
                 for geography in processed_data["Geography"].unique():

@@ -67,7 +67,7 @@ def prepare_housing_costs_data(data):
 
     print("Preparing housing costs data...")
 
-    # Print column names to help diagnose issues
+    # Print column names
     print(f"Column names in dataset: {', '.join(data.columns)}")
 
     # Check if required columns exist
@@ -75,12 +75,6 @@ def prepare_housing_costs_data(data):
     missing_columns = [col for col in required_columns if col not in data.columns]
     if missing_columns:
         print(f"ERROR: Required columns missing: {', '.join(missing_columns)}")
-        # Try to find similar columns
-        for col in missing_columns:
-            similar = [c for c in data.columns if col.lower() in c.lower()]
-            if similar:
-                print(f"  Similar columns to '{col}': {', '.join(similar)}")
-        return None
 
     # Filter for Owner Occupiers Housing Costs (CP042)
     housing_costs = data[data["cpih1dim1aggid"] == "CP042"].copy()
@@ -193,21 +187,7 @@ def plot_housing_costs(
         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
     )
 
-    # Mark periods of negative growth with light red background
-    neg_ranges = []
-    current_start = None
-
-    for i, row in data.iterrows():
-        if row["annual_pct_change"] < 0:
-            if current_start is None:
-                current_start = row["date"]
-        elif current_start is not None:
-            neg_ranges.append((current_start, row["date"]))
-            current_start = None
-
-    # Handle case where we end with negative values
-    if current_start is not None:
-        neg_ranges.append((current_start, data.iloc[-1]["date"]))
+    plt.xticks(rotation=90)
 
     plt.tight_layout()
 
