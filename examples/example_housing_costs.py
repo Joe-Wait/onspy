@@ -150,9 +150,7 @@ def plot_housing_costs(
     fig, ax = plt.subplots(figsize=figsize)
 
     # Plot annual percentage change
-    ax.plot(
-        data["date"], data["annual_pct_change"], linewidth=2, marker="o", markersize=3
-    )
+    ax.plot(data["date"], data["annual_pct_change"], linewidth=2)
 
     # Add a horizontal line at 0%
     ax.axhline(y=0, color="gray", linestyle="--", alpha=0.7)
@@ -187,7 +185,7 @@ def plot_housing_costs(
         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
     )
 
-    plt.xticks(rotation=90)
+    plt.xticks(rotation=45)
 
     plt.tight_layout()
 
