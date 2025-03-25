@@ -8,14 +8,13 @@ version = "0.1.0"
 description = "Python client for the Office of National Statistics (ONS) API"
 readme = "README.md"
 authors = [{ name = "Joe Wait" }]
-license = { text = "MIT" }
+license = "GPL-3.0-or-later"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -37,6 +36,12 @@ requires-python = ">=3.7"
 "Homepage" = "https://github.com/Joe-Wait/onspy"
 "Bug Tracker" = "https://github.com/Joe-Wait/onspy/issues"
 "Documentation" = "https://github.com/Joe-Wait/onspy"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

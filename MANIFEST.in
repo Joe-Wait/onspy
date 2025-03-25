@@ -2,9 +2,10 @@ include LICENSE
 include README.md
 include CHANGELOG.md
 include pyproject.toml
-include setup.py
 
+recursive-include src *.py
 recursive-include examples *.py
 recursive-include tests *.py
+recursive-include assets *.png
 
 global-exclude *.py[cod] __pycache__ *.so .*
