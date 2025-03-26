@@ -145,6 +145,15 @@ def process_response(response: requests.Response) -> Dict[str, Any]:
     return client.process_response(response)
 
 
+def get_browser_headers() -> Dict[str, str]:
+    """Get browser-like headers for HTTP requests.
+
+    Returns:
+        Dictionary with browser-like headers
+    """
+    return client._get_browser_headers()
+
+
 def read_csv(url: str, **kwargs) -> pd.DataFrame:
     """Read CSV from URL into pandas DataFrame.
 
@@ -160,7 +169,7 @@ def read_csv(url: str, **kwargs) -> pd.DataFrame:
     try:
         # Try using browser headers to download the CSV
         if url:
-            headers = client._get_browser_headers()
+            headers = get_browser_headers()
 
             logger.debug(f"Using browser headers to get CSV: {url}")
 
