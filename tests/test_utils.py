@@ -34,19 +34,19 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(null_coalesce(0, 5), 0)
         self.assertEqual(null_coalesce(False, True), False)
 
-    @patch("onspy.utils.requests.get")
-    def test_has_internet_success(self, mock_get):
+    @patch("onspy.utils.client.has_internet")
+    def test_has_internet_success(self, mock_client_has_internet):
         """Test has_internet when connection is successful."""
-        mock_get.return_value = Mock(status_code=200)
+        mock_client_has_internet.return_value = True
         self.assertTrue(has_internet())
-        mock_get.assert_called_once_with("https://www.google.com", timeout=5)
+        mock_client_has_internet.assert_called_once()
 
-    @patch("onspy.utils.requests.get")
-    def test_has_internet_failure(self, mock_get):
+    @patch("onspy.utils.client.has_internet")
+    def test_has_internet_failure(self, mock_client_has_internet):
         """Test has_internet when connection fails."""
-        mock_get.side_effect = requests.ConnectionError("Connection failed")
+        mock_client_has_internet.return_value = False
         self.assertFalse(has_internet())
-        mock_get.assert_called_once_with("https://www.google.com", timeout=5)
+        mock_client_has_internet.assert_called_once()
 
     def test_set_endpoint(self):
         """Test the set_endpoint function."""
@@ -103,43 +103,40 @@ class TestUtils(unittest.TestCase):
         self.assertIn("Accept-Language", headers)
         self.assertIn("Accept-Encoding", headers)
 
-    @patch("onspy.utils.has_internet")
-    @patch("onspy.utils.requests.get")
-    def test_make_request_success(self, mock_get, mock_has_internet):
+    @patch("onspy.utils.client.make_request")
+    def test_make_request_success(self, mock_client_make_request):
         """Test make_request when the request is successful."""
-        mock_has_internet.return_value = True
         mock_response = Mock(status_code=200)
-        mock_get.return_value = mock_response
+        mock_client_make_request.return_value = mock_response
 
         result = make_request("https://api.example.com/datasets")
 
         self.assertEqual(result, mock_response)
-        mock_get.assert_called_once()
+        mock_client_make_request.assert_called_once_with(
+            "https://api.example.com/datasets", None, None
+        )
 
-    @patch("onspy.utils.has_internet")
-    def test_make_request_no_internet(self, mock_has_internet):
+    @patch("onspy.utils.client.has_internet")
+    def test_make_request_no_internet(self, mock_client_has_internet):
         """Test make_request when there's no internet connection."""
-        mock_has_internet.return_value = False
+        mock_client_has_internet.return_value = False
 
         result = make_request("https://api.example.com/datasets")
 
         self.assertIsNone(result)
 
-    @patch("onspy.utils.has_internet")
-    @patch("onspy.utils.requests.get")
-    def test_make_request_with_params(self, mock_get, mock_has_internet):
+    @patch("onspy.utils.client.make_request")
+    def test_make_request_with_params(self, mock_client_make_request):
         """Test make_request with limit and offset parameters."""
-        mock_has_internet.return_value = True
         mock_response = Mock(status_code=200)
-        mock_get.return_value = mock_response
+        mock_client_make_request.return_value = mock_response
 
         result = make_request("https://api.example.com/datasets", limit=50, offset=100)
 
         self.assertEqual(result, mock_response)
-        mock_get.assert_called_once()
-        # Check that the limit and offset were passed as params
-        args, kwargs = mock_get.call_args
-        self.assertEqual(kwargs["params"], {"limit": 50, "offset": 100})
+        mock_client_make_request.assert_called_once_with(
+            "https://api.example.com/datasets", 50, 100
+        )
 
     def test_process_response(self):
         """Test the process_response function."""
@@ -166,6 +163,7 @@ class TestUtils(unittest.TestCase):
         """Test read_csv when the request is successful."""
         mock_response = Mock(status_code=200)
         mock_response.text = "id,value\n1,a\n2,b\n3,c"
+        mock_response.content = b"id,value\n1,a\n2,b\n3,c"
         mock_get.return_value = mock_response
 
         result = read_csv("https://api.example.com/data.csv")

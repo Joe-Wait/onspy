@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 EMPTY = ""
+ENDPOINT = client.endpoint  # Expose client's endpoint to maintain backward compatibility
 
 
 # Helper functions
