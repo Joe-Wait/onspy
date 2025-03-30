@@ -15,3 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for downloading CSV data via the ONS API
 - Documentation and examples
 - Test suite with unit and integration tests
+
+## [0.1.1] - 2025-03-30
+
+### Added
+
+- ons_get_latest function
+- Wellbeing example
