@@ -51,9 +51,11 @@ print(obs.head())
 
 The examples folder contains examples demonstrating basic usage and more advanced usage, such as creating plots from datasets:
 
-![Housing Costs Example](assets/weekly_deaths_by_geography.png)
+![Weekly Deaths Example](assets/weekly_deaths_by_geography.png)
 
 ![Housing Costs Example](assets/housing_costs_annual_change.png)
+
+![Wellbeing Example](assets/anxiety_index_22-23.png)
 
 ## Main Features
 
