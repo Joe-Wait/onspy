@@ -31,7 +31,7 @@ def ons_datasets() -> Optional[pd.DataFrame]:
         >>> onspy.ons_datasets()
     """
     req = build_base_request(datasets=EMPTY)
-    res = make_request(req, limit=60)
+    res = make_request(req, limit=1000)
     if res is None:
         return None
 

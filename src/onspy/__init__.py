@@ -39,7 +39,7 @@ from .datasets import (
     ons_latest_edition,
     ons_find_latest_version_across_editions,
 )
-from .get import ons_get, ons_get_obs, ons_dim, ons_dim_opts, ons_meta
+from .get import ons_get, ons_get_obs, ons_dim, ons_dim_opts, ons_meta, get_latest
 from .code_lists import (
     ons_codelists,
     ons_codelist,

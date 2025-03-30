@@ -282,3 +282,38 @@ def ons_meta(
         return None
 
     return process_response(res)
+
+
+def get_latest(dataset_id: str) -> pd.DataFrame:
+    """Get the latest version of a dataset across all editions.
+
+    This function automatically finds the latest version across all editions
+    and retrieves the dataset.
+
+    Args:
+        dataset_id: Dataset ID
+
+    Returns:
+        pandas DataFrame with the latest version of the dataset
+
+    Raises:
+        RuntimeError: If the latest version cannot be found or data retrieval fails
+
+    Examples:
+        >>> import onspy
+        >>> df = onspy.get_latest("weekly-deaths-region")
+    """
+    # Import the function here to avoid circular imports
+    from onspy.datasets import ons_find_latest_version_across_editions
+
+    latest = ons_find_latest_version_across_editions(dataset_id)
+    if not latest:
+        raise RuntimeError(f"Could not find latest version for dataset '{dataset_id}'")
+
+    edition, version = latest
+
+    df = ons_get(id=dataset_id, edition=edition, version=version)
+    if df is None:
+        raise RuntimeError("Failed to retrieve data from ONS API.")
+
+    return df
