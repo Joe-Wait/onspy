@@ -13,7 +13,7 @@ from onspy.get import (
     ons_dim,
     ons_dim_opts,
     ons_meta,
-    get_latest,
+    ons_get_latest,
 )
 
 
@@ -236,7 +236,7 @@ class TestGet(unittest.TestCase):
 
     @patch("onspy.datasets.ons_find_latest_version_across_editions")
     @patch("onspy.get.ons_get")
-    def test_get_latest(self, mock_ons_get, mock_find_latest):
+    def test_ons_get_latest(self, mock_ons_get, mock_find_latest):
         """Test the get_latest function."""
         # Setup mocks for successful case
         mock_find_latest.return_value = ("time-series", "5")
@@ -244,7 +244,7 @@ class TestGet(unittest.TestCase):
         mock_ons_get.return_value = mock_df
 
         # Call function
-        result = get_latest("dataset1")
+        result = ons_get_latest("dataset1")
 
         # Assert
         self.assertIsInstance(result, pd.DataFrame)
@@ -257,13 +257,13 @@ class TestGet(unittest.TestCase):
         # Test case where latest version can't be found
         mock_find_latest.return_value = None
         with self.assertRaises(RuntimeError):
-            get_latest("dataset1")
+            ons_get_latest("dataset1")
 
         # Test case where data retrieval fails
         mock_find_latest.return_value = ("time-series", "5")
         mock_ons_get.return_value = None
         with self.assertRaises(RuntimeError):
-            get_latest("dataset1")
+            ons_get_latest("dataset1")
 
 
 if __name__ == "__main__":

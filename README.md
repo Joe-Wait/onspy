@@ -38,8 +38,8 @@ print(ids[:5])
 # View dataset information
 onspy.ons_desc("cpih01")
 
-# Download data
-df = onspy.ons_get("cpih01")
+# Download the latest version of a dataset
+df = onspy.ons_get_latest("cpih01")
 print(df.head())
 
 # Get specific observations
@@ -71,6 +71,7 @@ The examples folder contains examples demonstrating basic usage and more advance
 ### Data Retrieval Functions
 
 - `ons_get(id, edition=None, version=None)` - Download a dataset
+- `ons_get_latest(id)` - Download the latest version of a dataset across all editions
 - `ons_get_obs(id, edition=None, version=None, **kwargs)` - Get specific observations
 - `ons_dim(id, edition=None, version=None)` - Get dimensions for a dataset
 - `ons_dim_opts(id, dimension, edition=None, version=None)` - Get dimension options

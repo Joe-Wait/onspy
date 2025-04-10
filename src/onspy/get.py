@@ -284,7 +284,7 @@ def ons_meta(
     return process_response(res)
 
 
-def get_latest(dataset_id: str) -> pd.DataFrame:
+def ons_get_latest(dataset_id: str) -> pd.DataFrame:
     """Get the latest version of a dataset across all editions.
 
     This function automatically finds the latest version across all editions
