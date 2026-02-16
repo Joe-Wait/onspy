@@ -29,3 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - fix ons_get_latest function name
+
+## [0.1.3] - 2025-02-16
+
+### Fixed
+
+- changed ping url to ons.gov.uk

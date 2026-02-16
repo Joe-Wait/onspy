@@ -58,7 +58,7 @@ class ONSClient:
         """
         try:
             # Try to connect to a widely available service
-            self._session.get("https://www.google.com", timeout=5)
+            self._session.get("https://www.ons.gov.uk", timeout=5)
             return True
         except requests.ConnectionError:
             return False
