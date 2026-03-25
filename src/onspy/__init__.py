@@ -3,6 +3,17 @@ onspy: Python client for the Office of National Statistics (ONS) API
 
 This package provides client functions for accessing the Office of National Statistics API
 at https://api.beta.ons.gov.uk/v1.
+
+Usage as library:
+    import onspy
+    df = onspy.list_datasets()
+    info = onspy.get_dataset_info("cpih01")
+    data = onspy.download_dataset("cpih01")
+
+Usage as CLI:
+    onspy call-tool list_datasets --limit 10
+    onspy call-tool get_dataset_info --id cpih01
+    onspy mcp  # start MCP server for AI agents
 """
 
 import logging
@@ -12,7 +23,6 @@ import os
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Add console handler if not already added
 if not logger.handlers:
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
@@ -22,35 +32,33 @@ if not logger.handlers:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-# Enable debug logging if ONS_DEBUG is set
 if os.environ.get("ONS_DEBUG", "").lower() in ("1", "true", "yes"):
     logger.setLevel(logging.DEBUG)
     for handler in logger.handlers:
         handler.setLevel(logging.DEBUG)
     logger.debug("Debug logging enabled for onspy")
 
-from .datasets import (
-    ons_datasets,
-    ons_ids,
-    ons_desc,
-    ons_editions,
-    ons_latest_href,
-    ons_latest_version,
-    ons_latest_edition,
-    ons_find_latest_version_across_editions,
+from .core import (
+    list_datasets,
+    get_dataset_ids,
+    get_dataset_info,
+    get_editions,
+    find_latest_version_across_editions,
+    download_dataset,
+    get_dimensions,
+    get_dimension_options,
+    get_observations,
+    get_metadata,
+    search_dataset,
+    list_codelists,
+    get_codelist_info,
+    get_codelist_editions,
+    get_codes,
+    get_code_info,
+    get_dev_url,
+    get_qmi_url,
+    invalidate_cache,
 )
-from .get import ons_get, ons_get_obs, ons_dim, ons_dim_opts, ons_meta, ons_get_latest
-from .code_lists import (
-    ons_codelists,
-    ons_codelist,
-    ons_codelist_editions,
-    ons_codelist_edition,
-    ons_codes,
-    ons_code,
-    ons_code_dataset,
-)
-from .search import ons_search
-from .browse import ons_browse, ons_browse_qmi
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Joe Wait"
