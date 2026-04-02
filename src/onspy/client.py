@@ -4,10 +4,13 @@ ONS API Client module.
 This module provides a centralized client class for making requests to the ONS API.
 """
 
-import logging
-import requests
 import json
-from typing import Optional, Dict, Any
+import logging
+from typing import Any, Dict, Optional
+
+import requests
+
+from .exceptions import ONSConnectionError, ONSRequestError
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +97,7 @@ class ONSClient:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         **kwargs,
-    ) -> Optional[requests.Response]:
+    ) -> requests.Response:
         """Make HTTP request to the ONS API.
 
         Args:
@@ -104,7 +107,11 @@ class ONSClient:
             **kwargs: Additional arguments to pass to requests.get
 
         Returns:
-            Response object if successful, None otherwise
+            Response object if successful
+
+        Raises:
+            ONSConnectionError: If no network or a transport error occurs
+            ONSRequestError: If the API returns an HTTP error response
         """
         logger.debug(f"Making request to URL: {url}")
         if limit is not None:
@@ -114,59 +121,68 @@ class ONSClient:
 
         if not self.has_internet():
             logger.error("Unable to connect: No internet connection available")
-            print(
-                "Unable to connect: Please ensure you have an active internet connection or access through a secure connection."
+            raise ONSConnectionError(
+                "Unable to connect: no internet connection available"
             )
-            return None
 
-        try:
-            # Prepare parameters
-            params = {}
-            if limit is not None:
-                params["limit"] = limit
-            if offset is not None:
-                params["offset"] = offset
+        # Prepare parameters
+        params = {}
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
 
-            logger.debug(f"Request params: {params}")
+        logger.debug(f"Request params: {params}")
 
-            # Try up to 3 times with exponential backoff
-            for attempt in range(3):
-                try:
-                    logger.debug(f"Attempt {attempt+1}/3")
+        last_error: Optional[Exception] = None
 
-                    response = self._session.get(
-                        url, params=params, timeout=30, **kwargs
+        # Try up to 3 times for transient failures
+        for attempt in range(3):
+            try:
+                logger.debug(f"Attempt {attempt+1}/3")
+
+                response = self._session.get(url, params=params, timeout=30, **kwargs)
+
+                logger.debug(f"Response status code: {response.status_code}")
+
+                response.raise_for_status()
+
+                if response.status_code == 200:
+                    logger.debug(
+                        f"Request successful. Content length: {len(response.content)}"
                     )
 
-                    logger.debug(f"Response status code: {response.status_code}")
+                return response
 
-                    response.raise_for_status()  # Raise exception for HTTP errors
+            except requests.exceptions.HTTPError as exc:
+                status_code = exc.response.status_code if exc.response is not None else None
+                body_preview = ""
+                if exc.response is not None and exc.response.text:
+                    body_preview = exc.response.text.strip().replace("\n", " ")[:240]
 
-                    if response.status_code == 200:
-                        logger.debug(
-                            f"Request successful. Content length: {len(response.content)}"
-                        )
+                message = f"HTTP request failed for {url}"
+                if status_code is not None:
+                    message += f" (status {status_code})"
+                if body_preview:
+                    message += f": {body_preview}"
 
-                    return response
+                last_error = ONSRequestError(message, status_code=status_code)
+                logger.warning(f"Request failed: {last_error}")
 
-                except (
-                    requests.exceptions.RequestException,
-                    requests.exceptions.HTTPError,
-                ) as e:
-                    logger.warning(f"Request failed: {e}")
+            except requests.exceptions.RequestException as exc:
+                last_error = ONSConnectionError(f"Request transport error for {url}: {exc}")
+                logger.warning(f"Request failed: {last_error}")
 
-                    if attempt == 2:  # Last attempt
-                        logger.error(f"Request failed after 3 attempts: {e}")
-                        print(f"Request failed: {e}")
-                        return None
+            except Exception as exc:
+                last_error = ONSConnectionError(f"Unexpected request error for {url}: {exc}")
+                logger.warning(f"Request failed: {last_error}")
 
-                    logger.debug(f"Retrying...")
-                    continue  # Try again
+            if attempt < 2:
+                logger.debug("Retrying...")
 
-        except Exception as err:
-            logger.error(f"Unexpected error during request: {err}", exc_info=True)
-            print(f"Error: {err}")
-            return None
+        if last_error is None:
+            raise ONSRequestError(f"Request failed for {url}")
+        raise last_error
 
     def process_response(self, response: requests.Response) -> Dict[str, Any]:
         """Process HTTP response and convert to JSON.
@@ -176,6 +192,9 @@ class ONSClient:
 
         Returns:
             JSON content as dictionary
+
+        Raises:
+            ONSRequestError: If JSON decoding fails
         """
         try:
             json_data = response.json()
@@ -188,10 +207,12 @@ class ONSClient:
                             f"First item keys: {list(json_data['items'][0].keys())}"
                         )
             return json_data
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             logger.error("Error decoding JSON response", exc_info=True)
-            print("Error decoding JSON response")
-            return {}
+            raise ONSRequestError(
+                f"Error decoding JSON response from {response.url}",
+                status_code=response.status_code,
+            ) from exc
 
     @classmethod
     def get_instance(cls) -> "ONSClient":

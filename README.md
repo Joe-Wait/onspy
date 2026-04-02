@@ -1,20 +1,18 @@
 # onspy <a href='https://github.com/Joe-Wait/onspy'><img src='assets/logo.png' align="right" height="132" /></a>
 
-A Python client for the Office of National Statistics (ONS) API.
+Python + MCP tooling for the UK Office for National Statistics (ONS) API, with
+a parquet-first workflow for local analytics.
 
 [![PyPI version](https://badge.fury.io/py/onspy.svg)](https://badge.fury.io/py/onspy)
 [![Python versions](https://img.shields.io/pypi/pyversions/onspy.svg)](https://pypi.org/project/onspy/)
 [![License](https://img.shields.io/github/license/Joe-Wait/onspy.svg)](https://github.com/Joe-Wait/onspy/blob/main/LICENSE)
 
-## Overview
+## What onspy does
 
-`onspy` provides a simple interface to access data from the UK Office of National Statistics API.
-It allows you to:
-
-- Retrieve datasets and their metadata
-- Search for specific data within datasets
-- Browse code lists and dimensions
-- Access quality and methodology information
+- Discover datasets, editions, dimensions, metadata, and code lists from ONS.
+- Download dataset tables to pandas for lightweight exploration.
+- Sync all or specific datasets to local parquet files for DuckDB analysis.
+- Expose these capabilities as MCP tools for AI-driven workflows.
 
 ## Installation
 
@@ -22,34 +20,117 @@ It allows you to:
 pip install onspy
 ```
 
-## Quick Start
+## Python quick start
 
 ```python
 import onspy
 
-# List all available datasets
-datasets = onspy.ons_datasets()
-print(datasets.head())
+# Discover datasets
+datasets = onspy.list_datasets(limit=5)
+print(datasets[["id", "title"]])
 
-# Get a list of dataset IDs
-ids = onspy.ons_ids()
-print(ids[:5])
+# Inspect one dataset
+info = onspy.get_dataset_info("cpih01")
+print(info["title"])
 
-# View dataset information
-onspy.ons_desc("cpih01")
-
-# Download the latest version of a dataset
-df = onspy.ons_get_latest("cpih01")
+# Download latest table (auto-resolves latest edition/version)
+df = onspy.download_dataset("cpih01")
 print(df.head())
 
-# Get specific observations
-obs = onspy.ons_get_obs("cpih01", geography="K02000001", aggregate="cpih1dim1A0", time="*")
+# Get filtered observations via dimensions
+obs = onspy.get_observations(
+    "cpih01",
+    filters={
+        "geography": "K02000001",
+        "aggregate": "cpih1dim1A0",
+        "time": "*",
+    },
+)
 print(obs.head())
+
+# Note: wildcard '*' works for table-backed datasets (with CSV download).
+# API-only datasets require explicit values per dimension.
 ```
+
+## MCP / CLI quick start
+
+```bash
+# Start MCP server for AI agents
+onspy mcp
+
+# Inspect available tools
+onspy list-tools
+
+# Call tools directly from CLI
+onspy call-tool list_datasets --limit 10
+onspy call-tool get_dataset_info --id cpih01
+onspy call-tool download_dataset --id cpih01 --preview-rows 5
+```
+
+## Parquet + DuckDB workflow
+
+Sync all datasets:
+
+```bash
+onspy call-tool download_all_parquet --output-dir ons_datasets --resume --delay 2.0
+```
+
+`manifest.json` is updated incrementally during sync so progress can be monitored.
+
+Sync specific datasets only:
+
+```bash
+onspy call-tool download_datasets_parquet --dataset-id cpih01 --dataset-id weekly-deaths-region --output-dir ons_datasets --resume --delay 2.0
+```
+
+Analyze locally with DuckDB:
+
+```sql
+SELECT * FROM read_parquet('ons_datasets/cpih01.parquet') LIMIT 10;
+SELECT count(*) AS rows FROM read_parquet('ons_datasets/*.parquet', filename=true);
+```
+
+## Core API surface
+
+Dataset and retrieval:
+
+- `list_datasets(limit=None)`
+- `get_dataset_ids()`
+- `get_dataset_info(id)`
+- `get_editions(id)`
+- `find_latest_version_across_editions(id)`
+- `download_dataset(id, edition=None, version=None)`
+- `get_dimensions(id, edition=None, version=None)`
+- `get_dimension_options(id, dimension, edition=None, version=None, limit=None, offset=None)`
+- `get_dimension_options_detailed(id, dimension, edition=None, version=None, limit=None, offset=None)`
+- `get_observations(id, filters, edition=None, version=None)`
+- `get_metadata(id, edition=None, version=None)`
+- `search_dataset(id, dimension, query, edition=None, version=None)`
+
+Code lists and links:
+
+- `list_codelists()`
+- `get_codelist_info(code_id)`
+- `get_codelist_editions(code_id)`
+- `get_codes(code_id, edition)`
+- `get_code_info(code_id, edition, code)`
+- `get_dev_url()`
+- `get_qmi_url(id)`
+
+Parquet sync:
+
+- `download_all_parquet(output_dir="ons_datasets", resume=False, delay=2.0)`
+- `download_datasets_parquet(dataset_ids, output_dir="ons_datasets", resume=False, delay=2.0)`
+
+Boundary helpers:
+
+- `list_boundaries()`
+- `download_boundary(boundary_id, output_dir="ons_boundaries", overwrite=False)`
 
 ## Examples
 
-The examples folder contains examples demonstrating basic usage and more advanced usage, such as creating plots from datasets:
+The `examples` folder contains examples demonstrating basic usage and more
+advanced usage, such as creating plots from datasets.
 
 ![Weekly Deaths Example](assets/weekly_deaths_by_geography.png)
 
@@ -57,114 +138,32 @@ The examples folder contains examples demonstrating basic usage and more advance
 
 ![Wellbeing Example](assets/anxiety_index_22-23.png)
 
-## Main Features
+![Religion Example](assets/religion_immigration_choropleth.png)
 
-### Dataset Functions
+## AI Usage
 
-- `ons_datasets()` - Get information about all available datasets
-- `ons_ids()` - Get a list of all available dataset IDs
-- `ons_desc(id)` - Print a description of a dataset
-- `ons_editions(id)` - Get available editions for a dataset
-- `ons_latest_edition(id)` - Get the latest edition name for a dataset
-- `ons_latest_version(id)` - Get the latest version number for a dataset
+Use `onspy` with AI by running the MCP server and asking natural language
+questions.
 
-### Data Retrieval Functions
+1. Start MCP server: `onspy mcp`
+2. Ask your AI question in normal language
+3. The agent discovers relevant ONS datasets, downloads data, and analyzes it.
 
-- `ons_get(id, edition=None, version=None)` - Download a dataset
-- `ons_get_latest(id)` - Download the latest version of a dataset across all editions
-- `ons_get_obs(id, edition=None, version=None, **kwargs)` - Get specific observations
-- `ons_dim(id, edition=None, version=None)` - Get dimensions for a dataset
-- `ons_dim_opts(id, dimension, edition=None, version=None)` - Get dimension options
-- `ons_meta(id, edition=None, version=None)` - Get metadata for a dataset
+Example prompt:
 
-### Code List Functions
-
-- `ons_codelists()` - Get a list of all available code lists
-- `ons_codelist(code_id)` - Get details for a specific code list
-- `ons_codelist_editions(code_id)` - Get editions for a code list
-- `ons_codes(code_id, edition)` - Get codes for a specific edition of a code list
-- `ons_code(code_id, edition, code)` - Get details for a specific code
-
-### Search Functions
-
-- `ons_search(id, name, query, edition=None, version=None)` - Search for a dataset
-
-### Browser Functions
-
-- `ons_browse()` - Open the ONS developer webpage in a browser
-- `ons_browse_qmi(id)` - Open the QMI webpage for a dataset in a browser
-
-## Advanced Usage Examples
-
-### Getting Data from a Specific Version
-
-```python
-# Get an older version of a dataset
-df = onspy.ons_get(id="cpih01", version="5")
+```text
+Write a report on how religion and migration are related across local authorities, explaining the key patterns and providing insightful figures.
 ```
 
-### Filtering by Dimensions
+## Building bots
 
-```python
-# Get dimensions for a dataset
-dimensions = onspy.ons_dim("cpih01")
-print(dimensions)
+ONS API traffic is rate limited:
+https://developer.ons.gov.uk/bots/
 
-# Get options for a specific dimension
-time_options = onspy.ons_dim_opts("cpih01", dimension="time")
-print(time_options[:5])
-
-# Get observations with specific dimension filters
-obs = onspy.ons_get_obs(
-    "cpih01",
-    geography="K02000001",  # UK
-    aggregate="cpih1dim1A0", # All items
-    time="Oct-11"           # Specific time
-)
-print(obs)
-```
-
-### Working with Code Lists
-
-```python
-# Get all code lists
-code_lists = onspy.ons_codelists()
-print(code_lists[:5])
-
-# Get details for a specific code list
-quarter_cl = onspy.ons_codelist("quarter")
-print(quarter_cl)
-
-# Get editions for a code list
-editions = onspy.ons_codelist_editions("quarter")
-print(editions)
-
-# Get codes for an edition
-codes = onspy.ons_codes("quarter", "one-off")
-print(codes)
-```
-
-## Building Bots
-
-If you are building a bot using onspy, it is best practice to update the User-Agent header in `client.py`.
-
-The API is [rate limited](https://developer.ons.gov.uk/bots/). Ensure your bot respects the limits to avoid being blocked.
-
-## API Reference
-
-For detailed API documentation, please refer to the [ONS Developer Hub](https://developer.ons.gov.uk/).
+If you run automated clients, set a clear User-Agent in
+`src/onspy/client.py`.
 
 ## License
 
-Copyright (C) 2025 Joe Wait
-
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GPL-3.0 License - see the LICENSE file for details.
-
-## Contributing
-
-Contributions are welcomed! Please feel free to raise an Issue or submit a Pull Request.
-
-## Acknowledgements
-
-This project was inspired by [onsr](https://github.com/kvasilopoulos/onsr) by [Kostas Vasilopoulos](https://github.com/kvasilopoulos).

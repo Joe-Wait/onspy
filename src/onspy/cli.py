@@ -305,6 +305,96 @@ async def download_dataset(
     )
 
 
+@call_tool_app.command(name="download_all_parquet")
+async def download_all_parquet(
+    *,
+    output_dir: Annotated[str, cyclopts.Parameter(help="")] = "ons_datasets",
+    resume: Annotated[bool, cyclopts.Parameter(help="")] = False,
+    delay: Annotated[float, cyclopts.Parameter(help="")] = 2.0,
+) -> None:
+    """Download every available ONS dataset as parquet.
+
+    Saves one parquet file per dataset in output_dir and writes a
+    manifest.json summary for downstream tooling.
+
+    Args:
+        output_dir: Target directory for parquet files
+        resume: Skip datasets that already exist in output_dir
+        delay: Seconds to wait between dataset downloads"""
+    await _call_tool(
+        "download_all_parquet",
+        {"output_dir": output_dir, "resume": resume, "delay": delay},
+    )
+
+
+@call_tool_app.command(name="download_datasets_parquet")
+async def download_datasets_parquet(
+    *,
+    dataset_id: Annotated[
+        list[str],
+        cyclopts.Parameter(
+            name=("--dataset-id",),
+            help="Dataset ID to download (repeat --dataset-id for multiple)",
+        ),
+    ],
+    output_dir: Annotated[str, cyclopts.Parameter(help="")] = "ons_datasets",
+    resume: Annotated[bool, cyclopts.Parameter(help="")] = False,
+    delay: Annotated[float, cyclopts.Parameter(help="")] = 2.0,
+) -> None:
+    """Download specific ONS datasets as parquet.
+
+    Useful when you only need a subset for local DuckDB analysis.
+
+    Args:
+        dataset_id: Dataset ID(s), repeat flag for multiple
+        output_dir: Target directory for parquet files
+        resume: Skip datasets that already exist in output_dir
+        delay: Seconds to wait between dataset downloads"""
+    dataset_ids = [item.strip() for item in dataset_id if str(item).strip()]
+    if len(dataset_ids) == 0:
+        console.print(
+            "[bold red]Error:[/bold red] provide at least one --dataset-id value"
+        )
+        sys.exit(1)
+
+    await _call_tool(
+        "download_datasets_parquet",
+        {
+            "dataset_ids": dataset_ids,
+            "output_dir": output_dir,
+            "resume": resume,
+            "delay": delay,
+        },
+    )
+
+
+@call_tool_app.command(name="list_boundaries")
+async def list_boundaries() -> None:
+    """List curated geography boundary files for choropleth mapping.
+
+    Returns IDs, year, coverage, code column, name column, and source URL."""
+    await _call_tool("list_boundaries", {})
+
+
+@call_tool_app.command(name="download_boundary")
+async def download_boundary(
+    *,
+    boundary_id: Annotated[str, cyclopts.Parameter(help="")],
+    output_dir: Annotated[str, cyclopts.Parameter(help="")] = "ons_boundaries",
+    overwrite: Annotated[bool, cyclopts.Parameter(help="")] = False,
+) -> None:
+    """Download a curated boundary GeoJSON file.
+
+    Args:
+        boundary_id: Boundary ID from list_boundaries()
+        output_dir: Directory to save GeoJSON file
+        overwrite: Overwrite if file already exists"""
+    await _call_tool(
+        "download_boundary",
+        {"boundary_id": boundary_id, "output_dir": output_dir, "overwrite": overwrite},
+    )
+
+
 @call_tool_app.command(name="get_dimensions")
 async def get_dimensions(
     *,
@@ -350,6 +440,35 @@ async def get_dimension_options(
     )
 
 
+@call_tool_app.command(name="get_dimension_options_detailed")
+async def get_dimension_options_detailed(
+    *,
+    id: Annotated[str, cyclopts.Parameter(help="")],
+    dimension: Annotated[str, cyclopts.Parameter(help="")],
+    limit: Annotated[
+        str | None,
+        cyclopts.Parameter(
+            help='JSON Schema: {\n                            "anyOf": [\n                              {\n                                "type": "integer"\n                              },\n                              {\n                                "type": "null"\n                              }\n                            ],\n                            "default": null\n                          }'
+        ),
+    ] = None,
+) -> None:
+    """Get dimension options with labels and code-list links.
+
+    Returns option value plus human-readable label and associated
+    code/code-list identifiers when available.
+
+    Args:
+        id: Dataset ID
+        dimension: Dimension name (e.g., 'geography', 'time')
+        limit: Maximum options to return"""
+    limit_parsed = json.loads(limit) if isinstance(limit, str) else limit
+
+    await _call_tool(
+        "get_dimension_options_detailed",
+        {"id": id, "dimension": dimension, "limit": limit_parsed},
+    )
+
+
 @call_tool_app.command(name="get_observations")
 async def get_observations(
     *,
@@ -375,7 +494,11 @@ async def get_observations(
 ) -> None:
     """Get filtered observations from a dataset.
 
-    All dimensions must be specified. Use \'*\' as wildcard for any dimension.
+    All dimensions must be specified.
+
+    Wildcard '*' is supported for table-backed datasets (those with downloadable
+    CSV tables). API-only datasets require explicit values for each dimension.
+
     Call get_dimensions() first to see required filters, then
     get_dimension_options() to see valid values.
 

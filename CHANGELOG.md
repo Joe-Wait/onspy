@@ -5,6 +5,73 @@ All notable changes to the onspy package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-02
+
+### Added
+
+- MCP server architecture as the runtime source of truth for tools and prompts
+- Unified `core.py` function layer used by MCP, CLI, and Python library usage
+- New MCP parquet sync tools:
+  - `download_all_parquet`
+  - `download_datasets_parquet`
+- New MCP boundary tools:
+  - `list_boundaries`
+  - `download_boundary`
+- New Python parquet sync APIs:
+  - `download_all_parquet(...)`
+  - `download_datasets_parquet(...)`
+- New detailed dimension options API/tool:
+  - `get_dimension_options_detailed(...)`
+- Updated `download_all.py` compatibility wrapper with specific dataset support (`--dataset-id`)
+- New tests for parquet sync and server tool wrappers
+
+### Changed
+
+- Major client refactor from legacy module split (`datasets.py`, `get.py`, `search.py`, etc.)
+  to a consolidated API centered on `core.py`
+- Public API naming moved away from legacy `ons_*` function names to explicit names like
+  `list_datasets`, `download_dataset`, `get_observations`, and `search_dataset`
+- `README.md` rewritten for MCP-first and parquet + DuckDB workflows
+- `SKILL.md` updated to include full parquet download and local DuckDB analysis instructions
+- CLI now includes parquet sync commands via `onspy call-tool ...`
+- `download_datasets_parquet` CLI input simplified to repeatable `--dataset-id` flags
+- `get_observations` wildcard behavior made deterministic:
+  table-backed datasets support `*`, API-only datasets require explicit values
+- HTTP client now raises typed request/connection exceptions instead of returning silent `None`
+- Parquet sync manifest now updates incrementally during long-running downloads
+- Package metadata and runtime dependencies updated for CLI/MCP/parquet workflow
+- Minimum supported Python version raised to 3.10 to match MCP/CLI type syntax
+- CI workflow updated to current Python version matrix and coverage target
+
+### Removed
+
+- Legacy unit tests tied to deleted pre-refactor modules and naming conventions
+- Tracked compiled Python bytecode artifacts (`__pycache__/*.pyc`) from the repository
+
+### Fixed
+
+- Corrected historical ordering and dates in changelog entries
+
+## [0.1.3] - 2026-02-16
+
+### Fixed
+
+- changed ping url to ons.gov.uk
+
+## [0.1.2] - 2025-04-10
+
+### Fixed
+
+- fix ons_get_latest function name
+
+## [0.1.1] - 2025-03-30
+
+### Added
+
+- ons_get_latest function
+- Wellbeing example
+- Update readme
+
 ## [0.1.0] - 2025-03-25
 
 ### Added
@@ -15,23 +82,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for downloading CSV data via the ONS API
 - Documentation and examples
 - Test suite with unit and integration tests
-
-## [0.1.1] - 2025-03-30
-
-### Added
-
-- ons_get_latest function
-- Wellbeing example
-- Update readme
-
-## [0.1.2] - 2025-04-10
-
-### Fixed
-
-- fix ons_get_latest function name
-
-## [0.1.3] - 2025-02-16
-
-### Fixed
-
-- changed ping url to ons.gov.uk

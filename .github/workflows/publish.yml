@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.8, 3.9, "3.10"]
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v3
@@ -24,7 +24,7 @@ jobs:
           pip install -e .
       - name: Test with pytest
         run: |
-          pytest tests/ --cov=src.onspy
+          pytest tests/ --cov=onspy --cov-report=term-missing
 
   deploy:
     needs: test
@@ -44,5 +44,7 @@ jobs:
           TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
           TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
         run: |
+          rm -rf dist build
           python -m build
+          twine check dist/*
           twine upload dist/*

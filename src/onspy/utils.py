@@ -12,8 +12,6 @@ from io import StringIO
 import logging
 
 from .client import default_client as client
-from .exceptions import ONSConnectionError, ONSRequestError
-
 logger = logging.getLogger(__name__)
 
 # Constants
@@ -119,7 +117,7 @@ def extend_request_dots(pre: str, **params) -> str:
 
 def make_request(
     query: str, limit: Optional[int] = None, offset: Optional[int] = None, **kwargs
-) -> Optional[requests.Response]:
+) -> requests.Response:
     """Make HTTP request to the ONS API.
 
     Args:
@@ -129,7 +127,7 @@ def make_request(
         **kwargs: Additional arguments to pass to requests.get
 
     Returns:
-        Response object if successful, None otherwise
+        Response object if successful
     """
     return client.make_request(query, limit, offset, **kwargs)
 

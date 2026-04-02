@@ -1,272 +1,151 @@
-"""
-Integration tests for the onspy package.
+"""Integration-style tests for package exports and MCP wrappers."""
 
-These tests check how different functions from various modules interact with each other.
-"""
+from unittest.mock import Mock
+import sys
+import types
 
-import unittest
-from unittest.mock import patch, Mock
 import pandas as pd
 
-from onspy import (
-    ons_datasets,
-    ons_ids,
-    ons_get,
-    ons_get_obs,
-    ons_dim,
-    ons_dim_opts,
-    ons_codelists,
-    ons_search,
-)
+import onspy
 
 
-class TestOnsIntegration(unittest.TestCase):
-    """Integration tests for the onspy package."""
+if "fastmcp" not in sys.modules:
+    fastmcp_module = types.ModuleType("fastmcp")
 
-    @patch("onspy.datasets.make_request")
-    @patch("onspy.datasets.process_response")
-    def test_datasets_ids_integration(self, mock_process, mock_make_request):
-        """Test integration between ons_datasets and ons_ids."""
-        # Setup mocks
-        mock_response = Mock()
-        mock_data = {
-            "items": [
-                {
-                    "id": "cpih01",
-                    "title": "Consumer Prices Index including owner occupiers' housing costs (CPIH)",
-                    "links": {
-                        "latest_version": {"href": "http://example.com/v1", "id": "1"}
-                    },
-                },
-                {
-                    "id": "mid-year-pop-est",
-                    "title": "Mid-year population estimates",
-                    "links": {
-                        "latest_version": {"href": "http://example.com/v2", "id": "2"}
-                    },
-                },
-            ]
-        }
-        mock_make_request.return_value = mock_response
-        mock_process.return_value = mock_data
+    class _FakeFastMCP:
+        def __init__(self, *args, **kwargs):
+            pass
 
-        # Call functions
-        datasets = ons_datasets()
-        ids = ons_ids()
+        def tool(self, fn):
+            return fn
 
-        # Assert
-        self.assertIsInstance(datasets, pd.DataFrame)
-        self.assertEqual(len(datasets), 2)
-        self.assertEqual(ids, ["cpih01", "mid-year-pop-est"])
+        def resource(self, *args, **kwargs):
+            def decorator(fn):
+                return fn
 
-    @patch("onspy.datasets.make_request")
-    @patch("onspy.datasets.process_response")
-    @patch("onspy.get.make_request")
-    @patch("onspy.get.process_response")
-    @patch("onspy.get.read_csv")
-    def test_get_with_latest_integration(
-        self,
-        mock_read_csv,
-        mock_process_get,
-        mock_make_request_get,
-        mock_process_datasets,
-        mock_make_request_datasets,
-    ):
-        """Test integration of ons_get with automatic latest version/edition detection."""
-        # Setup mocks for datasets module
-        mock_response_datasets = Mock()
-        mock_data_datasets = {
-            "items": [
-                {
-                    "id": "cpih01",
-                    "title": "CPIH",
-                    "links": {
-                        "latest_version": {
-                            "href": "http://example.com/datasets/cpih01/editions/time-series/versions/3",
-                            "id": "3",
-                        }
-                    },
-                }
-            ]
-        }
-        mock_make_request_datasets.return_value = mock_response_datasets
-        mock_process_datasets.return_value = mock_data_datasets
+            return decorator
 
-        # Setup mocks for get module
-        mock_response_get = Mock()
-        mock_data_get = {"downloads": {"csv": {"href": "http://example.com/data.csv"}}}
-        mock_make_request_get.return_value = mock_response_get
-        mock_process_get.return_value = mock_data_get
+        def prompt(self, fn):
+            return fn
 
-        # Mock CSV data
-        mock_df = pd.DataFrame({"date": ["2020-01", "2020-02"], "value": [100, 101]})
-        mock_read_csv.return_value = mock_df
+    fastmcp_module.FastMCP = _FakeFastMCP
+    sys.modules["fastmcp"] = fastmcp_module
 
-        # Call function (which should automatically use the latest edition/version)
-        result = ons_get("cpih01")
-
-        # Assert
-        self.assertIsInstance(result, pd.DataFrame)
-        self.assertEqual(result.shape, (2, 2))
-        # Check that the request was made with the correct edition and version
-        mock_make_request_get.assert_called_once()
-        args, _ = mock_make_request_get.call_args
-        self.assertIn("editions/time-series/versions/3", args[0])
-
-    def test_dimensions_observation_integration(self):
-        """Test integration between dimension and observation functions."""
-        # Create separate patches for more controlled mocking
-        with patch("onspy.datasets.make_request") as mock_make_request_datasets, patch(
-            "onspy.datasets.process_response"
-        ) as mock_process_datasets, patch(
-            "onspy.get.make_request"
-        ) as mock_make_request_get, patch(
-            "onspy.get.process_response"
-        ) as mock_process_get:
-
-            # Setup mocks for datasets module
-            mock_response_datasets = Mock()
-            mock_data_datasets = {
-                "items": [
-                    {
-                        "id": "cpih01",
-                        "title": "CPIH",
-                        "links": {
-                            "latest_version": {
-                                "href": "http://example.com/datasets/cpih01/editions/time-series/versions/3",
-                                "id": "3",
-                            }
-                        },
-                    }
-                ]
-            }
-            mock_make_request_datasets.return_value = mock_response_datasets
-            mock_process_datasets.return_value = mock_data_datasets
-
-            # Setup mock responses for dimension requests
-            dimensions_response = Mock(name="dimensions_response")
-            dimensions_data = {
-                "items": [
-                    {"name": "geography", "id": "geography"},
-                    {"name": "time", "id": "time"},
-                ]
-            }
-
-            # Setup mock responses for dimension options requests
-            options_response = Mock(name="options_response")
-            options_data = {
-                "items": [
-                    {"option": "K02000001", "label": "United Kingdom"},
-                    {"option": "E92000001", "label": "England"},
-                ],
-                "count": 2,
-                "total_count": 2,
-            }
-
-            # Setup mock responses for observations requests
-            observations_response = Mock(name="observations_response")
-            observations_data = {
-                "observations": [
-                    {
-                        "time": "2020-01",
-                        "geography": "K02000001",
-                        "value": "100.0",
-                    },
-                    {
-                        "time": "2020-02",
-                        "geography": "K02000001",
-                        "value": "101.0",
-                    },
-                ],
-                "total_observations": 2,
-            }
-
-            # Configure make_request_get to return appropriate responses
-            def request_side_effect(url, **kwargs):
-                if "/dimensions" in url and not "/options" in url:
-                    return dimensions_response
-                elif "/dimensions/geography/options" in url:
-                    return options_response
-                elif "/observations" in url:
-                    return observations_response
-                return None
-
-            mock_make_request_get.side_effect = request_side_effect
-
-            # Configure process_response to return appropriate data
-            def process_side_effect(response):
-                if response == dimensions_response:
-                    return dimensions_data
-                elif response == options_response:
-                    return options_data
-                elif response == observations_response:
-                    return observations_data
-                return {}
-
-            mock_process_get.side_effect = process_side_effect
-
-            # Call functions
-            dimensions = ons_dim("cpih01")
-            geo_options = ons_dim_opts("cpih01", dimension="geography")
-            obs = ons_get_obs("cpih01", geography="K02000001", time="*")
-
-            # Assert
-            self.assertEqual(dimensions, ["geography", "time"])
-            self.assertEqual(geo_options, ["K02000001", "E92000001"])
-            self.assertIsInstance(obs, pd.DataFrame)
-            self.assertEqual(len(obs), 2)
-
-    @patch("onspy.code_lists.make_request")
-    @patch("onspy.code_lists.process_response")
-    @patch("onspy.search.make_request")
-    @patch("onspy.search.process_response")
-    def test_codelists_search_integration(
-        self,
-        mock_process_search,
-        mock_make_request_search,
-        mock_process_codelists,
-        mock_make_request_codelists,
-    ):
-        """Test integration between code lists and search functions."""
-        # Setup mocks for code lists
-        mock_response_codelists = Mock()
-        mock_data_codelists = {
-            "items": [
-                {"links": {"self": {"id": "geography"}}},
-                {"links": {"self": {"id": "aggregate"}}},
-            ]
-        }
-        mock_make_request_codelists.return_value = mock_response_codelists
-        mock_process_codelists.return_value = mock_data_codelists
-
-        # Setup mocks for search
-        mock_response_search = Mock()
-        mock_data_search = {
-            "items": [
-                {"id": "cpih1dim1A0", "label": "All items"},
-                {"id": "cpih1dim1A1", "label": "Food and non-alcoholic beverages"},
-            ]
-        }
-        mock_make_request_search.return_value = mock_response_search
-        mock_process_search.return_value = mock_data_search
-
-        # Call functions
-        with patch(
-            "onspy.search.ons_latest_edition", return_value="time-series"
-        ), patch("onspy.search.ons_latest_version", return_value="3"), patch(
-            "onspy.search.assert_valid_id", return_value=True
-        ):
-
-            codelists = ons_codelists()
-            search_results = ons_search("cpih01", name="aggregate", query="food")
-
-            # Assert
-            self.assertEqual(codelists, ["geography", "aggregate"])
-            self.assertEqual(len(search_results), 2)
-            self.assertEqual(
-                search_results[1]["label"], "Food and non-alcoholic beverages"
-            )
+import onspy.server as server
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_package_exports_include_refactored_api():
+    assert callable(onspy.list_datasets)
+    assert callable(onspy.download_dataset)
+    assert callable(onspy.download_all_parquet)
+    assert callable(onspy.download_datasets_parquet)
+    assert callable(onspy.get_dimension_options_detailed)
+    assert callable(onspy.list_boundaries)
+    assert callable(onspy.download_boundary)
+
+
+def test_server_download_dataset_returns_preview(monkeypatch):
+    df = pd.DataFrame(
+        [
+            {"time": "2025", "value": 1.1},
+            {"time": "2026", "value": 1.3},
+        ]
+    )
+
+    monkeypatch.setattr(
+        server.core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "5"),
+    )
+    monkeypatch.setattr(server.core, "download_dataset", lambda *args, **kwargs: df)
+
+    result = server.download_dataset("cpih01", preview_rows=1)
+
+    assert result["dataset_id"] == "cpih01"
+    assert result["edition"] == "time-series"
+    assert result["version"] == "5"
+    assert result["total_rows"] == 2
+    assert len(result["preview"]) == 1
+
+
+def test_server_get_observations_wraps_dataframe(monkeypatch):
+    df = pd.DataFrame([{"time": "2025", "value": "1.1"}])
+    monkeypatch.setattr(server.core, "get_observations", lambda *args, **kwargs: df)
+
+    result = server.get_observations("cpih01", filters={"time": "*"})
+
+    assert result["total"] == 1
+    assert result["observations"][0]["time"] == "2025"
+
+
+def test_server_download_all_parquet_proxies_to_sync_module(monkeypatch):
+    summary = {"requested_count": 10, "succeeded_count": 10}
+    call_mock = Mock(return_value=summary)
+    monkeypatch.setattr(server.parquet_sync, "download_all_parquet", call_mock)
+
+    result = server.download_all_parquet(output_dir="tmp_data", resume=True, delay=0.5)
+
+    assert result == summary
+    call_mock.assert_called_once_with(output_dir="tmp_data", resume=True, delay=0.5)
+
+
+def test_server_download_datasets_parquet_proxies_to_sync_module(monkeypatch):
+    summary = {"requested_count": 2, "succeeded_count": 2}
+    call_mock = Mock(return_value=summary)
+    monkeypatch.setattr(server.parquet_sync, "download_datasets_parquet", call_mock)
+
+    result = server.download_datasets_parquet(
+        dataset_ids=["cpih01", "weekly-deaths-region"],
+        output_dir="tmp_data",
+        resume=False,
+        delay=0,
+    )
+
+    assert result == summary
+    call_mock.assert_called_once_with(
+        dataset_ids=["cpih01", "weekly-deaths-region"],
+        output_dir="tmp_data",
+        resume=False,
+        delay=0,
+    )
+
+
+def test_server_get_dimension_options_detailed(monkeypatch):
+    payload = [{"option": "K02000001", "label": "United Kingdom"}]
+    call_mock = Mock(return_value=payload)
+    monkeypatch.setattr(server.core, "get_dimension_options_detailed", call_mock)
+
+    result = server.get_dimension_options_detailed("cpih01", "geography", limit=5)
+
+    assert result == payload
+    call_mock.assert_called_once_with("cpih01", "geography", limit=5)
+
+
+def test_server_list_boundaries_proxies_module(monkeypatch):
+    payload = [{"id": "lad_2021_uk_bfc"}]
+    call_mock = Mock(return_value=payload)
+    monkeypatch.setattr(server.boundaries, "list_boundaries", call_mock)
+
+    result = server.list_boundaries()
+
+    assert result == payload
+    call_mock.assert_called_once_with()
+
+
+def test_server_download_boundary_proxies_module(monkeypatch):
+    payload = {"boundary_id": "lad_2021_uk_bfc", "path": "/tmp/x.geojson"}
+    call_mock = Mock(return_value=payload)
+    monkeypatch.setattr(server.boundaries, "download_boundary", call_mock)
+
+    result = server.download_boundary(
+        boundary_id="lad_2021_uk_bfc",
+        output_dir="tmp_boundaries",
+        overwrite=True,
+    )
+
+    assert result == payload
+    call_mock.assert_called_once_with(
+        boundary_id="lad_2021_uk_bfc",
+        output_dir="tmp_boundaries",
+        overwrite=True,
+    )

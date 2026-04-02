@@ -1,87 +1,43 @@
-"""
-Unit tests for the search module.
-"""
+"""Tests for search behavior in onspy.core."""
 
-import unittest
-from unittest.mock import patch, Mock
+from unittest.mock import Mock
 
-from onspy.search import ons_search
+import pandas as pd
+import pytest
+
+import onspy.core as core
 
 
-class TestSearch(unittest.TestCase):
-    """Test suite for the search module."""
-
-    @patch("onspy.search.assert_valid_id")
-    @patch("onspy.search.ons_latest_edition")
-    @patch("onspy.search.ons_latest_version")
-    @patch("onspy.search.make_request")
-    @patch("onspy.search.process_response")
-    def test_ons_search(
-        self,
-        mock_process,
-        mock_make_request,
-        mock_latest_version,
-        mock_latest_edition,
-        mock_assert,
-    ):
-        """Test the ons_search function."""
-        # Setup mocks
-        mock_assert.return_value = True
-        mock_latest_edition.return_value = "time-series"
-        mock_latest_version.return_value = "3"
-
-        mock_response = Mock()
-        mock_data = {
+def test_search_dataset_returns_items(monkeypatch):
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "3"),
+    )
+    monkeypatch.setattr(core, "make_request", lambda *args, **kwargs: Mock())
+    monkeypatch.setattr(
+        core,
+        "process_response",
+        lambda response: {
             "items": [
-                {"id": "item1", "label": "Item 1"},
-                {"id": "item2", "label": "Item 2"},
+                {"id": "cpih1dim1A0", "label": "All items"},
+                {"id": "cpih1dim1A1", "label": "Food"},
             ]
-        }
-        mock_make_request.return_value = mock_response
-        mock_process.return_value = mock_data
+        },
+    )
 
-        # Call function
-        result = ons_search("dataset1", name="time", query="2020")
+    result = core.search_dataset("cpih01", dimension="aggregate", query="food")
 
-        # Assert
-        self.assertEqual(result, mock_data["items"])
-
-    @patch("onspy.search.assert_valid_id")
-    @patch("onspy.search.ons_latest_edition")
-    @patch("onspy.search.ons_latest_version")
-    def test_ons_search_with_missing_params(
-        self, mock_latest_version, mock_latest_edition, mock_assert
-    ):
-        """Test ons_search with missing parameters."""
-        # Setup mocks
-        mock_assert.return_value = True
-        mock_latest_edition.return_value = "time-series"
-        mock_latest_version.return_value = "3"
-
-        # Test with missing name
-        with self.assertRaises(ValueError):
-            ons_search("dataset1", query="2020")
-
-        # Test with missing query
-        with self.assertRaises(ValueError):
-            ons_search("dataset1", name="time")
-
-    @patch("onspy.search.assert_valid_id")
-    @patch("onspy.search.ons_latest_edition")
-    @patch("onspy.search.ons_latest_version")
-    def test_ons_search_with_missing_edition_version(
-        self, mock_latest_version, mock_latest_edition, mock_assert
-    ):
-        """Test ons_search when latest edition and version can't be determined."""
-        # Setup mocks
-        mock_assert.return_value = True
-        mock_latest_edition.return_value = None
-        mock_latest_version.return_value = None
-
-        # Should raise ValueError
-        with self.assertRaises(ValueError):
-            ons_search("dataset1", name="time", query="2020")
+    assert len(result) == 2
+    assert result[1]["label"] == "Food"
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_search_dataset_requires_dimension():
+    with pytest.raises(ValueError, match="dimension"):
+        core.search_dataset("cpih01", dimension=None, query="food")
+
+
+def test_search_dataset_requires_query():
+    with pytest.raises(ValueError, match="query"):
+        core.search_dataset("cpih01", dimension="aggregate", query=None)

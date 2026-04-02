@@ -1,270 +1,224 @@
-"""
-Unit tests for the get module.
-"""
+"""Tests for data retrieval functions in onspy.core."""
 
-import unittest
-from unittest.mock import patch, Mock
+from unittest.mock import Mock
+
 import pandas as pd
+import pytest
 
-from onspy.get import (
-    ons_get,
-    ons_get_obs,
-    build_request_obs,
-    ons_dim,
-    ons_dim_opts,
-    ons_meta,
-    ons_get_latest,
-)
+import onspy.core as core
 
 
-class TestGet(unittest.TestCase):
-    """Test suite for the get module."""
+def test_download_dataset_uses_csv_link(monkeypatch):
+    expected = pd.DataFrame({"x": [1, 2], "y": ["a", "b"]})
+    read_csv_mock = Mock(return_value=expected)
 
-    @patch("onspy.get.assert_valid_id")
-    @patch("onspy.get.ons_latest_edition")
-    @patch("onspy.get.ons_latest_version")
-    @patch("onspy.get.make_request")
-    @patch("onspy.get.process_response")
-    @patch("onspy.get.read_csv")
-    def test_ons_get(
-        self,
-        mock_read_csv,
-        mock_process,
-        mock_make_request,
-        mock_latest_version,
-        mock_latest_edition,
-        mock_assert,
-    ):
-        """Test the ons_get function."""
-        # Setup mocks
-        mock_assert.return_value = True
-        mock_latest_edition.return_value = "time-series"
-        mock_latest_version.return_value = "3"
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "7"),
+    )
+    monkeypatch.setattr(
+        core,
+        "_get_dataset_definition",
+        lambda *args, **kwargs: {"downloads": {"csv": {"href": "https://example.com/data.csv"}}},
+    )
+    monkeypatch.setattr(core, "read_csv", read_csv_mock)
 
-        mock_response = Mock()
-        mock_data = {"downloads": {"csv": {"href": "http://example.com/data.csv"}}}
-        mock_make_request.return_value = mock_response
-        mock_process.return_value = mock_data
+    result = core.download_dataset("cpih01")
 
-        mock_df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
-        mock_read_csv.return_value = mock_df
+    assert result.equals(expected)
+    read_csv_mock.assert_called_once_with("https://example.com/data.csv")
 
-        # Call function
-        result = ons_get("dataset1")
 
-        # Assert
-        self.assertIsInstance(result, pd.DataFrame)
-        self.assertEqual(result.shape, (3, 2))
-        mock_read_csv.assert_called_with("http://example.com/data.csv")
+def test_get_dimensions_returns_names(monkeypatch):
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "1"),
+    )
+    monkeypatch.setattr(core, "make_request", lambda *args, **kwargs: Mock())
+    monkeypatch.setattr(
+        core,
+        "process_response",
+        lambda response: {"items": [{"name": "geography"}, {"name": "time"}]},
+    )
 
-    @patch("onspy.get.assert_valid_id")
-    @patch("onspy.get.ons_latest_edition")
-    @patch("onspy.get.ons_latest_version")
-    @patch("onspy.get.make_request")
-    @patch("onspy.get.process_response")
-    def test_ons_get_obs(
-        self,
-        mock_process,
-        mock_make_request,
-        mock_latest_version,
-        mock_latest_edition,
-        mock_assert,
-    ):
-        """Test the ons_get_obs function."""
-        # Setup mocks
-        mock_assert.return_value = True
-        mock_latest_edition.return_value = "time-series"
-        mock_latest_version.return_value = "3"
+    assert core.get_dimensions("cpih01") == ["geography", "time"]
 
-        mock_response = Mock()
-        mock_data = {
-            "observations": [
-                {"time": "2020", "value": "10.5"},
-                {"time": "2021", "value": "11.2"},
-            ],
-            "total_observations": 2,
-            "limit": 10,
-            "offset": 0,
-        }
-        mock_make_request.return_value = mock_response
-        mock_process.return_value = mock_data
 
-        # Call function with dimension filters
-        result = ons_get_obs("dataset1", geography="K02000001", time="*")
+def test_get_dimension_options_raises_for_invalid_dimension(monkeypatch):
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "1"),
+    )
+    monkeypatch.setattr(core, "get_dimensions", lambda *args, **kwargs: ["time"])
 
-        # Assert
-        self.assertIsInstance(result, pd.DataFrame)
-        self.assertEqual(result.shape, (2, 2))
+    with pytest.raises(ValueError, match="Invalid dimension"):
+        core.get_dimension_options("cpih01", "geography")
 
-        # The build_request_obs part will be tested separately
 
-    def test_build_request_obs(self):
-        """Test the build_request_obs function."""
-        # Test with regular parameters
-        with patch("onspy.get.ons_dim", return_value=["time", "geography"]):
-            result = build_request_obs("dataset1", time="2020", geography="K02000001")
-            self.assertIn("time=2020", result)
-            self.assertIn("geography=K02000001", result)
+def test_get_dimension_options_returns_values(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "get_dimension_options_detailed",
+        lambda *args, **kwargs: [{"option": "2025"}, {"option": "2026"}],
+    )
 
-            # Test with list parameter
-            result = build_request_obs(
-                "dataset1", time=["2020", "2021"], geography="K02000001"
-            )
-            self.assertIn("time=2020", result)
-            self.assertIn("geography=K02000001", result)
+    result = core.get_dimension_options("cpih01", "time")
 
-            # Test with missing dimension
-            with self.assertRaises(ValueError):
-                build_request_obs("dataset1", time="2020")  # Missing geography
+    assert result == ["2025", "2026"]
 
-    @patch("onspy.get.assert_valid_id")
-    @patch("onspy.get.ons_latest_edition")
-    @patch("onspy.get.ons_latest_version")
-    @patch("onspy.get.make_request")
-    @patch("onspy.get.process_response")
-    def test_ons_dim(
-        self,
-        mock_process,
-        mock_make_request,
-        mock_latest_version,
-        mock_latest_edition,
-        mock_assert,
-    ):
-        """Test the ons_dim function."""
-        # Setup mocks
-        mock_assert.return_value = True
-        mock_latest_edition.return_value = "time-series"
-        mock_latest_version.return_value = "3"
 
-        mock_response = Mock()
-        mock_data = {
+def test_get_dimension_options_detailed_returns_labels_and_links(monkeypatch):
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "1"),
+    )
+    monkeypatch.setattr(core, "get_dimensions", lambda *args, **kwargs: ["time"])
+    monkeypatch.setattr(core, "make_request", lambda *args, **kwargs: Mock())
+    monkeypatch.setattr(
+        core,
+        "process_response",
+        lambda response: {
             "items": [
-                {"name": "time", "id": "time"},
-                {"name": "geography", "id": "geography"},
+                {
+                    "option": "2025",
+                    "label": "2025",
+                    "dimension": "time",
+                    "links": {
+                        "code": {"id": "2025", "href": "https://example.com/code/2025"},
+                        "code_list": {
+                            "id": "time",
+                            "href": "https://example.com/code-lists/time",
+                        },
+                    },
+                }
             ]
+        },
+    )
+
+    result = core.get_dimension_options_detailed("cpih01", "time")
+
+    assert result[0]["option"] == "2025"
+    assert result[0]["label"] == "2025"
+    assert result[0]["code_id"] == "2025"
+    assert result[0]["code_list_id"] == "time"
+
+
+def test_get_observations_requires_all_dimensions(monkeypatch):
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "1"),
+    )
+    monkeypatch.setattr(core, "get_dimensions", lambda *args, **kwargs: ["time", "geo"])
+
+    with pytest.raises(ValueError, match="Dimensions misspecified"):
+        core.get_observations("cpih01", filters={"time": "*"})
+
+
+def test_get_observations_api_only_requires_explicit_values(monkeypatch):
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "1"),
+    )
+    monkeypatch.setattr(core, "get_dimensions", lambda *args, **kwargs: ["time"])
+    monkeypatch.setattr(core, "_get_dataset_definition", lambda *args, **kwargs: {})
+
+    with pytest.raises(ValueError, match=r"Wildcard '\*' is only supported"):
+        core.get_observations("cpih01", filters={"time": "*"})
+
+
+def test_get_observations_api_only_returns_dataframe(monkeypatch):
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "1"),
+    )
+    monkeypatch.setattr(core, "get_dimensions", lambda *args, **kwargs: ["time"])
+    monkeypatch.setattr(core, "_get_dataset_definition", lambda *args, **kwargs: {})
+    monkeypatch.setattr(core, "make_request", lambda *args, **kwargs: Mock())
+    monkeypatch.setattr(
+        core,
+        "process_response",
+        lambda response: {"observations": [{"time": "2025", "obs": "1.1"}]},
+    )
+
+    result = core.get_observations("cpih01", filters={"time": "2025"})
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == 1
+    assert result.iloc[0]["time"] == "2025"
+
+
+def test_get_observations_table_backed_supports_wildcard(monkeypatch):
+    table = pd.DataFrame(
+        {
+            "uk-only": ["K02000001", "K02000001", "W92000004"],
+            "Geography": ["United Kingdom", "United Kingdom", "Wales"],
+            "mmm-yy": ["Jan-26", "Dec-25", "Jan-26"],
+            "Time": ["Jan-26", "Dec-25", "Jan-26"],
+            "observation": [100.0, 101.0, 99.0],
         }
-        mock_make_request.return_value = mock_response
-        mock_process.return_value = mock_data
+    )
 
-        # Call function
-        result = ons_dim("dataset1")
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "67"),
+    )
+    monkeypatch.setattr(
+        core,
+        "get_dimensions",
+        lambda *args, **kwargs: ["geography", "time"],
+    )
+    monkeypatch.setattr(
+        core,
+        "_get_dataset_definition",
+        lambda *args, **kwargs: {"downloads": {"csv": {"href": "https://example.com/data.csv"}}},
+    )
+    monkeypatch.setattr(core, "read_csv", lambda *args, **kwargs: table)
+    monkeypatch.setattr(
+        core,
+        "get_metadata",
+        lambda *args, **kwargs: {
+            "dimensions": [
+                {"name": "geography", "id": "uk-only", "label": "Geography"},
+                {"name": "time", "id": "mmm-yy", "label": "Time"},
+            ]
+        },
+    )
 
-        # Assert
-        self.assertEqual(result, ["time", "geography"])
+    result = core.get_observations(
+        "cpih01",
+        filters={"geography": "K02000001", "time": "*"},
+    )
 
-    @patch("onspy.get.assert_valid_id")
-    @patch("onspy.get.ons_latest_edition")
-    @patch("onspy.get.ons_latest_version")
-    @patch("onspy.get.ons_dim")
-    @patch("onspy.get.make_request")
-    @patch("onspy.get.process_response")
-    def test_ons_dim_opts(
-        self,
-        mock_process,
-        mock_make_request,
-        mock_ons_dim,
-        mock_latest_version,
-        mock_latest_edition,
-        mock_assert,
-    ):
-        """Test the ons_dim_opts function."""
-        # Setup mocks
-        mock_assert.return_value = True
-        mock_latest_edition.return_value = "time-series"
-        mock_latest_version.return_value = "3"
-        mock_ons_dim.return_value = ["time", "geography"]
-
-        mock_response = Mock()
-        mock_data = {
-            "items": [
-                {"option": "2020", "id": "2020"},
-                {"option": "2021", "id": "2021"},
-            ],
-            "count": 2,
-            "total_count": 2,
-            "limit": 50,
-            "offset": 0,
-        }
-        mock_make_request.return_value = mock_response
-        mock_process.return_value = mock_data
-
-        # Call function
-        result = ons_dim_opts("dataset1", dimension="time")
-
-        # Assert
-        self.assertEqual(result, ["2020", "2021"])
-
-        # Test with invalid dimension
-        with self.assertRaises(ValueError):
-            ons_dim_opts("dataset1", dimension="invalid_dim")
-
-    @patch("onspy.get.assert_valid_id")
-    @patch("onspy.get.ons_latest_edition")
-    @patch("onspy.get.ons_latest_version")
-    @patch("onspy.get.make_request")
-    @patch("onspy.get.process_response")
-    def test_ons_meta(
-        self,
-        mock_process,
-        mock_make_request,
-        mock_latest_version,
-        mock_latest_edition,
-        mock_assert,
-    ):
-        """Test the ons_meta function."""
-        # Setup mocks
-        mock_assert.return_value = True
-        mock_latest_edition.return_value = "time-series"
-        mock_latest_version.return_value = "3"
-
-        mock_response = Mock()
-        mock_data = {
-            "release_date": "2023-01-01",
-            "next_release": "2024-01-01",
-            "contact": {"name": "Test Contact", "email": "test@example.com"},
-        }
-        mock_make_request.return_value = mock_response
-        mock_process.return_value = mock_data
-
-        # Call function
-        result = ons_meta("dataset1")
-
-        # Assert
-        self.assertEqual(result, mock_data)
-        self.assertEqual(result["release_date"], "2023-01-01")
-        self.assertEqual(result["contact"]["email"], "test@example.com")
-
-    @patch("onspy.datasets.ons_find_latest_version_across_editions")
-    @patch("onspy.get.ons_get")
-    def test_ons_get_latest(self, mock_ons_get, mock_find_latest):
-        """Test the get_latest function."""
-        # Setup mocks for successful case
-        mock_find_latest.return_value = ("time-series", "5")
-        mock_df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
-        mock_ons_get.return_value = mock_df
-
-        # Call function
-        result = ons_get_latest("dataset1")
-
-        # Assert
-        self.assertIsInstance(result, pd.DataFrame)
-        self.assertEqual(result.shape, (3, 2))
-        mock_find_latest.assert_called_with("dataset1")
-        mock_ons_get.assert_called_with(
-            id="dataset1", edition="time-series", version="5"
-        )
-
-        # Test case where latest version can't be found
-        mock_find_latest.return_value = None
-        with self.assertRaises(RuntimeError):
-            ons_get_latest("dataset1")
-
-        # Test case where data retrieval fails
-        mock_find_latest.return_value = ("time-series", "5")
-        mock_ons_get.return_value = None
-        with self.assertRaises(RuntimeError):
-            ons_get_latest("dataset1")
+    assert len(result) == 2
+    assert set(result["uk-only"].tolist()) == {"K02000001"}
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_get_metadata_returns_payload(monkeypatch):
+    payload = {"contact": {"name": "ONS"}, "release_date": "2026-01-01"}
+
+    monkeypatch.setattr(core, "_validate_id", lambda dataset_id: pd.DataFrame())
+    monkeypatch.setattr(
+        core,
+        "_resolve_edition_version",
+        lambda dataset_id, edition, version: ("time-series", "1"),
+    )
+    monkeypatch.setattr(core, "make_request", lambda *args, **kwargs: Mock())
+    monkeypatch.setattr(core, "process_response", lambda response: payload)
+
+    assert core.get_metadata("cpih01") == payload

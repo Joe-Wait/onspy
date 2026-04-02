@@ -18,14 +18,19 @@ from typing import Optional, List, Dict, Any
 
 try:
     from . import core
+    from . import boundaries
+    from . import parquet_sync
 except ImportError:
     import onspy.core as core
+    import onspy.boundaries as boundaries
+    import onspy.parquet_sync as parquet_sync
 
 mcp = FastMCP(
     "onspy",
     instructions=(
         "Access UK Office for National Statistics (ONS) data. "
-        "Search datasets, download data, explore dimensions and code lists."
+        "Search datasets, download data, sync parquet files, download mapping boundaries, "
+        "and explore dimensions and code lists."
     ),
 )
 
@@ -144,6 +149,83 @@ def download_dataset(
 
 
 @mcp.tool
+def download_all_parquet(
+    output_dir: str = "ons_datasets",
+    resume: bool = False,
+    delay: float = 2.0,
+) -> Dict[str, Any]:
+    """Download every available ONS dataset as parquet.
+
+    Saves one parquet file per dataset in output_dir and writes a
+    manifest.json summary for downstream tooling.
+
+    Args:
+        output_dir: Target directory for parquet files.
+        resume: Skip datasets that already exist in output_dir.
+        delay: Seconds to wait between dataset downloads.
+    """
+    return parquet_sync.download_all_parquet(
+        output_dir=output_dir,
+        resume=resume,
+        delay=delay,
+    )
+
+
+@mcp.tool
+def download_datasets_parquet(
+    dataset_ids: List[str],
+    output_dir: str = "ons_datasets",
+    resume: bool = False,
+    delay: float = 2.0,
+) -> Dict[str, Any]:
+    """Download specific ONS datasets as parquet.
+
+    Useful when you only need a subset for local DuckDB analysis.
+
+    Args:
+        dataset_ids: List of dataset IDs to download.
+        output_dir: Target directory for parquet files.
+        resume: Skip datasets that already exist in output_dir.
+        delay: Seconds to wait between dataset downloads.
+    """
+    return parquet_sync.download_datasets_parquet(
+        dataset_ids=dataset_ids,
+        output_dir=output_dir,
+        resume=resume,
+        delay=delay,
+    )
+
+
+@mcp.tool
+def list_boundaries() -> List[Dict[str, Any]]:
+    """List curated geography boundary files for choropleth mapping.
+
+    Returns IDs, year, coverage, code column, name column, and source URL.
+    """
+    return boundaries.list_boundaries()
+
+
+@mcp.tool
+def download_boundary(
+    boundary_id: str,
+    output_dir: str = "ons_boundaries",
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    """Download a curated boundary GeoJSON file.
+
+    Args:
+        boundary_id: Boundary ID from list_boundaries()
+        output_dir: Directory to save GeoJSON file
+        overwrite: Overwrite if file already exists
+    """
+    return boundaries.download_boundary(
+        boundary_id=boundary_id,
+        output_dir=output_dir,
+        overwrite=overwrite,
+    )
+
+
+@mcp.tool
 def get_dimensions(id: str) -> List[str]:
     """List available dimensions (filterable columns) for a dataset.
 
@@ -176,6 +258,25 @@ def get_dimension_options(
 
 
 @mcp.tool
+def get_dimension_options_detailed(
+    id: str,
+    dimension: str,
+    limit: int | None = None,
+) -> List[Dict[str, Any]]:
+    """Get dimension options with labels and code-list links.
+
+    Returns option value plus human-readable label and associated
+    code/code-list identifiers when available.
+
+    Args:
+        id: Dataset ID
+        dimension: Dimension name (e.g., 'geography', 'time')
+        limit: Maximum options to return
+    """
+    return core.get_dimension_options_detailed(id, dimension, limit=limit)
+
+
+@mcp.tool
 def get_observations(
     id: str,
     filters: Dict[str, str],
@@ -184,7 +285,11 @@ def get_observations(
 ) -> Dict[str, Any]:
     """Get filtered observations from a dataset.
 
-    All dimensions must be specified. Use '*' as wildcard for any dimension.
+    All dimensions must be specified.
+
+    Wildcard '*' is supported for table-backed datasets (those with downloadable
+    CSV tables). API-only datasets require explicit values for each dimension.
+
     Call get_dimensions() first to see required filters, then
     get_dimension_options() to see valid values.
 

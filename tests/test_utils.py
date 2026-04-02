@@ -22,6 +22,7 @@ from onspy.utils import (
     cat_ratio,
     cat_ratio_obs,
 )
+from onspy.exceptions import ONSConnectionError, ONSRequestError
 
 
 class TestUtils(unittest.TestCase):
@@ -121,9 +122,8 @@ class TestUtils(unittest.TestCase):
         """Test make_request when there's no internet connection."""
         mock_client_has_internet.return_value = False
 
-        result = make_request("https://api.example.com/datasets")
-
-        self.assertIsNone(result)
+        with self.assertRaises(ONSConnectionError):
+            make_request("https://api.example.com/datasets")
 
     @patch("onspy.utils.client.make_request")
     def test_make_request_with_params(self, mock_client_make_request):
@@ -153,10 +153,11 @@ class TestUtils(unittest.TestCase):
         """Test process_response when JSON decoding fails."""
         mock_response = Mock()
         mock_response.json.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
+        mock_response.url = "https://api.example.com"
+        mock_response.status_code = 200
 
-        result = process_response(mock_response)
-
-        self.assertEqual(result, {})
+        with self.assertRaises(ONSRequestError):
+            process_response(mock_response)
 
     @patch("onspy.utils.requests.get")
     def test_read_csv_success(self, mock_get):

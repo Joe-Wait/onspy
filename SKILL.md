@@ -1,6 +1,6 @@
 ---
 name: "onspy-cli"
-description: "CLI for the onspy MCP server. Access UK Office for National Statistics data: search datasets, download data, explore dimensions and code lists."
+description: "CLI for the onspy MCP server. Discover ONS datasets, download metadata/data, sync all or specific datasets to parquet, then analyze locally with DuckDB."
 ---
 
 # onspy CLI
@@ -107,6 +107,64 @@ onspy call-tool download_dataset --id <value> --edition <value> --version <value
 | `--version` | string | no | JSON string |
 | `--preview-rows` | integer | no |  |
 
+### download_all_parquet
+
+Download all available ONS datasets as local parquet files.
+
+Writes one parquet file per dataset plus `manifest.json` in the output
+directory. Manifest is updated incrementally while downloading so agent
+progress can be monitored. Designed for local analytics workflows (DuckDB,
+Polars, etc.).
+
+```bash
+onspy call-tool download_all_parquet --output-dir <value> [--resume] --delay <value>
+```
+
+| Flag | Type | Required | Description |
+|------|------|----------|-------------|
+| `--output-dir` | string | no | Directory for parquet files (default `ons_datasets`) |
+| `--resume` | boolean | no | Skip files that already exist |
+| `--delay` | number | no | Seconds between downloads |
+
+### download_datasets_parquet
+
+Download specific datasets as local parquet files.
+
+Use this when you know the exact dataset IDs you want.
+
+```bash
+onspy call-tool download_datasets_parquet --dataset-id cpih01 --dataset-id weekly-deaths-region --output-dir <value> [--resume] --delay <value>
+```
+
+| Flag | Type | Required | Description |
+|------|------|----------|-------------|
+| `--dataset-id` | string | yes | Dataset ID (repeat flag for multiple IDs) |
+| `--output-dir` | string | no | Directory for parquet files (default `ons_datasets`) |
+| `--resume` | boolean | no | Skip files that already exist |
+| `--delay` | number | no | Seconds between downloads |
+
+### list_boundaries
+
+List curated geography boundary files for choropleth mapping.
+
+```bash
+onspy call-tool list_boundaries
+```
+
+### download_boundary
+
+Download a curated boundary GeoJSON file.
+
+```bash
+onspy call-tool download_boundary --boundary-id <value> --output-dir <value> --overwrite <value>
+```
+
+| Flag | Type | Required | Description |
+|------|------|----------|-------------|
+| `--boundary-id` | string | yes | Boundary ID from `list_boundaries` |
+| `--output-dir` | string | no | Directory for GeoJSON files |
+| `--overwrite` | boolean | no | Overwrite existing file |
+
 ### get_dimensions
 
 List available dimensions (filterable columns) for a dataset.
@@ -147,11 +205,29 @@ onspy call-tool get_dimension_options --id <value> --dimension <value> --limit <
 | `--dimension` | string | yes |  |
 | `--limit` | string | no | JSON string |
 
+### get_dimension_options_detailed
+
+Get dimension options with labels and code-list links.
+
+```bash
+onspy call-tool get_dimension_options_detailed --id <value> --dimension <value> --limit <value>
+```
+
+| Flag | Type | Required | Description |
+|------|------|----------|-------------|
+| `--id` | string | yes |  |
+| `--dimension` | string | yes |  |
+| `--limit` | string | no | JSON string |
+
 ### get_observations
 
 Get filtered observations from a dataset.
 
-All dimensions must be specified. Use '*' as wildcard for any dimension.
+All dimensions must be specified.
+
+Wildcard '*' is supported for table-backed datasets (those with downloadable
+CSV tables). API-only datasets require explicit values for each dimension.
+
 Call get_dimensions() first to see required filters, then
 get_dimension_options() to see valid values.
 
@@ -322,6 +398,50 @@ onspy call-tool get_qmi_url --id <value>
 | Flag | Type | Required | Description |
 |------|------|----------|-------------|
 | `--id` | string | yes |  |
+
+## Agent Defaults
+
+When using this skill, the agent should handle technical details automatically.
+
+- Do not require users to provide dataset IDs or tool names
+- Translate plain-language user questions into the right onspy tool calls
+- Discover relevant datasets first, then fetch data and analyze
+- For analysis tasks, prefer parquet + DuckDB over repeated API calls
+
+## Recommended Agent Workflow (Parquet + DuckDB)
+
+For broad analysis tasks, prefer a local parquet workflow over repeated API calls:
+
+1. Discover relevant dataset IDs:
+
+```bash
+onspy call-tool list_datasets --limit 100
+```
+
+2. Sync data locally:
+
+```bash
+# All datasets
+onspy call-tool download_all_parquet --output-dir ons_datasets --resume --delay 2.0
+
+# Only specific datasets
+onspy call-tool download_datasets_parquet --dataset-id cpih01 --dataset-id weekly-deaths-region --output-dir ons_datasets --resume --delay 2.0
+```
+
+Wait for the command to complete before querying parquet files. While running,
+`manifest.json` is updated incrementally and can be inspected for progress.
+
+3. Analyze in DuckDB CLI:
+
+```bash
+duckdb
+SELECT * FROM read_parquet('ons_datasets/cpih01.parquet') LIMIT 10;
+SELECT count(*) AS rows FROM read_parquet('ons_datasets/*.parquet', filename=true);
+```
+
+4. Use API tools for exploration or metadata as needed (`get_dataset_info`,
+`get_dimensions`, `get_dimension_options`, `get_dimension_options_detailed`,
+`get_metadata`).
 
 ## Utility Commands
 

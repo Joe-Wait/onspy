@@ -5,13 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "onspy"
 version = "0.2.0"
-description = "Python client for the Office of National Statistics (ONS) API"
+description = "Python and MCP tooling for the Office for National Statistics (ONS) API"
 readme = "README.md"
 authors = [{ name = "Joe Wait" }]
-license = { file = "LICENSE" }
+license = "GPL-3.0-only"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -32,10 +31,14 @@ keywords = [
     "mcp",
 ]
 dependencies = [
+    "cyclopts>=3.0.0",
+    "fastmcp>=3.0.0",
     "pandas>=1.0.0",
+    "pyarrow>=14.0.0",
     "requests>=2.25.0",
+    "rich>=13.0.0",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 [project.optional-dependencies]
 cli = ["fastmcp>=3.0.0", "cyclopts>=3.0.0", "rich>=13.0.0"]

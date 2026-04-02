@@ -6,11 +6,12 @@ All functions return values only (no prints). Auto-detection of edition/version
 is handled consistently via _resolve_edition_version().
 """
 
+import logging
 import re
 import time
+from typing import Any, Dict, List, Optional, Tuple
+
 import pandas as pd
-from typing import Optional, List, Dict, Any, Tuple
-import logging
 
 from .utils import (
     build_base_request,
@@ -47,9 +48,6 @@ def _get_datasets_cached() -> pd.DataFrame:
 
     req = build_base_request(datasets=EMPTY)
     res = make_request(req, limit=1000)
-    if res is None:
-        return pd.DataFrame()
-
     raw = process_response(res)
     df = pd.DataFrame(raw.get("items", []))
 
@@ -225,9 +223,6 @@ def get_editions(id: str) -> List[str]:
 
     req = build_base_request(datasets=id, editions=EMPTY)
     res = make_request(req)
-    if res is None:
-        return []
-
     raw = process_response(res)
     return [item.get("edition", "") for item in raw.get("items", [])]
 
@@ -256,9 +251,6 @@ def find_latest_version_across_editions(id: str) -> Optional[Tuple[str, str]]:
     for edition in editions:
         req = build_base_request(datasets=id, editions=edition)
         res = make_request(req)
-        if res is None:
-            continue
-
         raw = process_response(res)
 
         if "links" in raw and "latest_version" in raw["links"]:
@@ -284,6 +276,149 @@ def find_latest_version_across_editions(id: str) -> Optional[Tuple[str, str]]:
 # ============================================================================
 
 
+def _get_dataset_definition(id: str, edition: str, version: str) -> Dict[str, Any]:
+    """Get dataset definition payload for a resolved id/edition/version."""
+    req = build_request(id, edition, version)
+    return process_response(make_request(req))
+
+
+def _find_matching_column(columns: List[str], candidates: List[str]) -> Optional[str]:
+    """Find a matching DataFrame column using exact then case-insensitive lookup."""
+    if not columns:
+        return None
+
+    by_lower = {col.lower(): col for col in columns}
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if candidate in columns:
+            return candidate
+        lowered = candidate.lower()
+        if lowered in by_lower:
+            return by_lower[lowered]
+    return None
+
+
+def _normalize_filter_values(value: Any) -> List[str]:
+    """Normalize a filter value into a list of non-empty strings."""
+    if isinstance(value, (list, tuple, set)):
+        values = [str(v).strip() for v in value if v is not None and str(v).strip()]
+    elif value is None:
+        values = []
+    else:
+        text = str(value).strip()
+        values = [text] if text else []
+    return values
+
+
+def _build_dimension_column_map(
+    table: pd.DataFrame,
+    available_dims: List[str],
+    dimensions_meta: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """Infer code/label columns in downloaded tables for each dimension."""
+    columns = list(table.columns)
+    meta_by_name = {
+        d.get("name", ""): d for d in dimensions_meta if isinstance(d, dict) and d.get("name")
+    }
+
+    mapping: Dict[str, Dict[str, Optional[str]]] = {}
+    for dim in available_dims:
+        meta = meta_by_name.get(dim, {})
+        dim_id = str(meta.get("id") or "").strip()
+        label = str(meta.get("label") or "").strip()
+
+        code_candidates = [dim_id, dim]
+        label_candidates = [label]
+
+        if label:
+            code_candidates.append(f"{label} Code")
+
+        code_col = _find_matching_column(columns, code_candidates)
+        label_col = _find_matching_column(columns, label_candidates)
+
+        mapping[dim] = {
+            "code_column": code_col,
+            "label_column": label_col,
+            "dimension_id": dim_id or None,
+            "dimension_label": label or None,
+        }
+
+    return mapping
+
+
+def _filter_table_observations(
+    table: pd.DataFrame,
+    available_dims: List[str],
+    filters: Dict[str, Any],
+    dimension_map: Dict[str, Dict[str, Optional[str]]],
+) -> pd.DataFrame:
+    """Apply dimension filters to a downloaded table."""
+    filtered = table.copy()
+
+    for dim in available_dims:
+        values = _normalize_filter_values(filters.get(dim))
+        if not values:
+            raise ValueError(f"Dimension '{dim}' must include at least one filter value")
+
+        if "*" in values:
+            continue
+
+        cols = dimension_map.get(dim, {})
+        code_col = cols.get("code_column")
+        label_col = cols.get("label_column")
+
+        if not code_col and not label_col:
+            raise ValueError(
+                f"Could not map dimension '{dim}' to downloaded table columns"
+            )
+
+        values_set = {v.strip() for v in values}
+        values_lower = {v.lower() for v in values_set}
+
+        mask = pd.Series(False, index=filtered.index)
+        if code_col:
+            series = filtered[code_col].astype(str).str.strip()
+            mask = mask | series.isin(values_set) | series.str.lower().isin(values_lower)
+        if label_col and label_col != code_col:
+            series = filtered[label_col].astype(str).str.strip()
+            mask = mask | series.isin(values_set) | series.str.lower().isin(values_lower)
+
+        filtered = filtered[mask]
+
+    return filtered.reset_index(drop=True)
+
+
+def _get_observations_via_api(
+    id: str,
+    edition: str,
+    version: str,
+    available_dims: List[str],
+    filters: Dict[str, Any],
+) -> pd.DataFrame:
+    """Fetch observations through the ONS observations endpoint."""
+    chunks: List[str] = []
+    for dim in available_dims:
+        values = _normalize_filter_values(filters.get(dim))
+        if not values:
+            raise ValueError(f"Dimension '{dim}' must include exactly one filter value")
+        if "*" in values:
+            raise ValueError(
+                "Wildcard '*' is only supported when the dataset has a downloadable CSV table"
+            )
+        if len(values) != 1:
+            raise ValueError(
+                "API-only datasets require exactly one value per dimension"
+            )
+        chunks.append(f"{dim}={values[0]}")
+
+    obs_params = "&".join(chunks)
+    base = build_request(id, edition, version)
+    req = f"{base}/observations?{obs_params}"
+    raw = process_response(make_request(req))
+    return pd.DataFrame(raw.get("observations", []))
+
+
 def download_dataset(
     id: str,
     edition: Optional[str] = None,
@@ -302,12 +437,7 @@ def download_dataset(
     _validate_id(id)
     edition, version = _resolve_edition_version(id, edition, version)
 
-    req = build_request(id, edition, version)
-    res = make_request(req)
-    if res is None:
-        return pd.DataFrame()
-
-    raw = process_response(res)
+    raw = _get_dataset_definition(id, edition, version)
     csv_url = raw.get("downloads", {}).get("csv", {}).get("href", None)
 
     if csv_url:
@@ -337,15 +467,61 @@ def get_dimensions(
     req = build_request(id, edition, version)
     req = f"{req}/dimensions"
 
-    res = make_request(req)
-    if res is None:
-        return []
-
-    raw = process_response(res)
+    raw = process_response(make_request(req))
 
     if "items" in raw and isinstance(raw["items"], list):
         return [item.get("name", "") for item in raw["items"]]
     return []
+
+
+def get_dimension_options_detailed(
+    id: str,
+    dimension: str,
+    edition: Optional[str] = None,
+    version: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Get detailed option records for a specific dimension.
+
+    Returns option values along with labels and code/code-list links.
+    """
+    _validate_id(id)
+    edition, version = _resolve_edition_version(id, edition, version)
+
+    available = get_dimensions(id, edition, version)
+    if dimension not in available:
+        raise ValueError(
+            f"Invalid dimension '{dimension}'. Available: {', '.join(available)}"
+        )
+
+    req = build_request(id, edition, version)
+    req = f"{req}/dimensions/{dimension}/options"
+    raw = process_response(make_request(req, limit=limit, offset=offset))
+
+    details: List[Dict[str, Any]] = []
+    for item in raw.get("items", []):
+        links = item.get("links", {}) if isinstance(item, dict) else {}
+        code = links.get("code", {}) if isinstance(links, dict) else {}
+        code_list = links.get("code_list", {}) if isinstance(links, dict) else {}
+
+        details.append(
+            {
+                "option": item.get("option", ""),
+                "label": item.get("label", ""),
+                "dimension": item.get("dimension", dimension),
+                "code_id": code.get("id", "") if isinstance(code, dict) else "",
+                "code_href": code.get("href", "") if isinstance(code, dict) else "",
+                "code_list_id": (
+                    code_list.get("id", "") if isinstance(code_list, dict) else ""
+                ),
+                "code_list_href": (
+                    code_list.get("href", "") if isinstance(code_list, dict) else ""
+                ),
+            }
+        )
+
+    return details
 
 
 def get_dimension_options(
@@ -369,33 +545,20 @@ def get_dimension_options(
     Returns:
         List of option values
     """
-    _validate_id(id)
-    edition, version = _resolve_edition_version(id, edition, version)
-
-    # Validate dimension exists
-    available = get_dimensions(id, edition, version)
-    if dimension not in available:
-        raise ValueError(
-            f"Invalid dimension '{dimension}'. Available: {', '.join(available)}"
-        )
-
-    req = build_request(id, edition, version)
-    req = f"{req}/dimensions/{dimension}/options"
-
-    res = make_request(req, limit=limit, offset=offset)
-    if res is None:
-        return []
-
-    raw = process_response(res)
-
-    if "items" in raw and isinstance(raw["items"], list):
-        return [item.get("option", "") for item in raw["items"]]
-    return []
+    detailed = get_dimension_options_detailed(
+        id=id,
+        dimension=dimension,
+        edition=edition,
+        version=version,
+        limit=limit,
+        offset=offset,
+    )
+    return [item.get("option", "") for item in detailed]
 
 
 def get_observations(
     id: str,
-    filters: Dict[str, str],
+    filters: Dict[str, Any],
     edition: Optional[str] = None,
     version: Optional[str] = None,
 ) -> pd.DataFrame:
@@ -403,7 +566,9 @@ def get_observations(
 
     Args:
         id: Dataset ID
-        filters: Dictionary of dimension filters (use '*' as wildcard)
+        filters: Dictionary of dimension filters.
+            For table-backed datasets (with CSV download), '*' is supported.
+            For API-only datasets, wildcard is not supported.
         edition: Edition name (auto-detects if None)
         version: Version number (auto-detects if None)
 
@@ -426,25 +591,29 @@ def get_observations(
     if not available_dims and not filters:
         raise ValueError("No dimensions available and no filters provided")
 
-    chunks = []
-    for key, value in filters.items():
-        if isinstance(value, (list, tuple)) and len(value) > 0:
-            value = value[0]
-        chunks.append(f"{key}={value}")
-    obs_params = "&".join(chunks)
+    extras = [dim for dim in param_names if dim not in available_dims]
+    if extras:
+        raise ValueError(
+            f"Unknown dimensions in filters: {', '.join(extras)}. "
+            f"Available: {', '.join(available_dims)}"
+        )
 
-    base = build_request(id, edition, version)
-    req = f"{base}/observations?{obs_params}"
+    dataset_definition = _get_dataset_definition(id, edition, version)
+    csv_url = dataset_definition.get("downloads", {}).get("csv", {}).get("href", "")
 
-    res = make_request(req)
-    if res is None:
-        return pd.DataFrame()
+    if csv_url:
+        table = read_csv(csv_url)
+        if table.empty:
+            raise ValueError(f"Downloaded dataset table is empty for '{id}'")
 
-    raw = process_response(res)
+        metadata = get_metadata(id, edition, version)
+        dimensions_meta = metadata.get("dimensions", [])
+        dimension_map = _build_dimension_column_map(
+            table, available_dims, dimensions_meta
+        )
+        return _filter_table_observations(table, available_dims, filters, dimension_map)
 
-    if "observations" in raw:
-        return pd.DataFrame(raw["observations"])
-    return pd.DataFrame()
+    return _get_observations_via_api(id, edition, version, available_dims, filters)
 
 
 def get_metadata(
@@ -468,11 +637,7 @@ def get_metadata(
     req = build_request(id, edition, version)
     req = f"{req}/metadata"
 
-    res = make_request(req)
-    if res is None:
-        return {}
-
-    return process_response(res)
+    return process_response(make_request(req))
 
 
 # ============================================================================
@@ -487,11 +652,7 @@ def list_codelists() -> List[str]:
         List of code list ID strings
     """
     req = build_base_request(**{"code-lists": EMPTY})
-    res = make_request(req, limit=80)
-    if res is None:
-        return []
-
-    raw = process_response(res)
+    raw = process_response(make_request(req, limit=80))
 
     try:
         return [item["links"]["self"]["id"] for item in raw.get("items", [])]
@@ -548,11 +709,7 @@ def get_codelist_info(code_id: str) -> Dict[str, Any]:
     _validate_codelist(code_id)
 
     req = build_base_request(**{"code-lists": code_id})
-    res = make_request(req)
-    if res is None:
-        return {}
-
-    return process_response(res)
+    return process_response(make_request(req))
 
 
 def get_codelist_editions(code_id: str) -> List[Dict[str, Any]]:
@@ -567,11 +724,7 @@ def get_codelist_editions(code_id: str) -> List[Dict[str, Any]]:
     _validate_codelist(code_id)
 
     req = build_base_request(**{"code-lists": code_id, "editions": EMPTY})
-    res = make_request(req)
-    if res is None:
-        return []
-
-    raw = process_response(res)
+    raw = process_response(make_request(req))
     return raw.get("items", [])
 
 
@@ -591,11 +744,7 @@ def get_codes(code_id: str, edition: str) -> List[Dict[str, Any]]:
     req = build_base_request(
         **{"code-lists": code_id, "editions": edition, "codes": EMPTY}
     )
-    res = make_request(req)
-    if res is None:
-        return []
-
-    raw = process_response(res)
+    raw = process_response(make_request(req))
     return raw.get("items", [])
 
 
@@ -619,11 +768,7 @@ def get_code_info(code_id: str, edition: str, code: str) -> Dict[str, Any]:
     req = build_base_request(
         **{"code-lists": code_id, "editions": edition, "codes": code}
     )
-    res = make_request(req)
-    if res is None:
-        return {}
-
-    return process_response(res)
+    return process_response(make_request(req))
 
 
 # ============================================================================
@@ -671,11 +816,7 @@ def search_dataset(
 
     req = f"{base}?q={query}"
 
-    res = make_request(req)
-    if res is None:
-        return []
-
-    raw = process_response(res)
+    raw = process_response(make_request(req))
     return raw.get("items", [])
 
 

@@ -9,6 +9,7 @@ Usage as library:
     df = onspy.list_datasets()
     info = onspy.get_dataset_info("cpih01")
     data = onspy.download_dataset("cpih01")
+    sync = onspy.download_all_parquet(output_dir="ons_datasets")
 
 Usage as CLI:
     onspy call-tool list_datasets --limit 10
@@ -47,6 +48,7 @@ from .core import (
     download_dataset,
     get_dimensions,
     get_dimension_options,
+    get_dimension_options_detailed,
     get_observations,
     get_metadata,
     search_dataset,
@@ -59,6 +61,8 @@ from .core import (
     get_qmi_url,
     invalidate_cache,
 )
+from .parquet_sync import download_all_parquet, download_datasets_parquet
+from .boundaries import list_boundaries, download_boundary
 
 __version__ = "0.2.0"
 __author__ = "Joe Wait"
