@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -31,6 +33,7 @@ MAX_BACKOFF = 120.0
 BACKOFF_MULTIPLIER = 2.0
 STREAM_CSV_CHUNK_ROWS = 50_000
 STREAM_DATASET_PREFIXES = ("ashe-", "TS", "RM", "ST")
+SYNC_LOCK_FILENAME = ".onspy_parquet_sync.lock"
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -77,6 +80,80 @@ def _normalize_dataset_ids(dataset_ids: Iterable[str]) -> List[str]:
     return normalized
 
 
+def _pid_is_alive(pid: int) -> bool:
+    """Return True when a process with pid appears to be running."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def _acquire_sync_lock(output_dir: Path) -> tuple[Path, str]:
+    """Acquire an exclusive lock file for parquet sync in output_dir."""
+    lock_path = output_dir / SYNC_LOCK_FILENAME
+    token = uuid.uuid4().hex
+    payload = {
+        "pid": os.getpid(),
+        "token": token,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    for _ in range(3):
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+                json.dump(payload, lock_file)
+            return lock_path, token
+        except FileExistsError:
+            try:
+                existing = json.loads(lock_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+
+            existing_pid = int(existing.get("pid", 0) or 0)
+            if existing_pid and not _pid_is_alive(existing_pid):
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+
+            raise RuntimeError(
+                "Parquet sync already running for output directory "
+                f"'{output_dir}'. Active lock: {lock_path}"
+            )
+
+    raise RuntimeError(f"Could not acquire parquet sync lock: {lock_path}")
+
+
+def _release_sync_lock(lock_path: Path | None, token: str | None) -> None:
+    """Release the sync lock only if it belongs to this process token."""
+    if lock_path is None or token is None:
+        return
+    if not lock_path.exists():
+        return
+
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+
+    if payload.get("token") != token:
+        return
+
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _download_dataset_with_retry(
     dataset_id: str,
     max_retries: int,
@@ -94,7 +171,7 @@ def _download_dataset_with_retry(
             return df
         except Exception as exc:
             is_last_attempt = attempt >= max_retries
-            is_retryable = _is_retryable_stream_error(exc)
+            is_retryable = _is_retryable_error(exc)
 
             if is_last_attempt or not is_retryable:
                 raise
@@ -137,7 +214,9 @@ def _stream_csv_to_parquet(
     if chunk_rows < 1:
         raise ValueError("chunk_rows must be >= 1")
 
-    tmp_path = parquet_path.with_name(f"{parquet_path.name}.tmp")
+    tmp_path = parquet_path.with_name(
+        f".{parquet_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
     if tmp_path.exists():
         tmp_path.unlink()
 
@@ -150,7 +229,12 @@ def _stream_csv_to_parquet(
         response = core.make_request(csv_url, stream=True)
         response.raw.decode_content = True
 
-        reader = pd.read_csv(response.raw, chunksize=chunk_rows, low_memory=True)
+        reader = pd.read_csv(
+            response.raw,
+            chunksize=chunk_rows,
+            dtype="string",
+            low_memory=False,
+        )
         for chunk in reader:
             if chunk is None:
                 continue
@@ -220,7 +304,7 @@ def _download_large_dataset_to_parquet_with_retry(
             }
         except Exception as exc:
             is_last_attempt = attempt >= max_retries
-            is_retryable = _is_retryable_error(exc)
+            is_retryable = _is_retryable_stream_error(exc)
 
             if is_last_attempt or not is_retryable:
                 raise
@@ -318,31 +402,16 @@ def download_datasets_parquet(
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
+    lock_path, lock_token = _acquire_sync_lock(out)
 
-    started_at = time.time()
-    succeeded: List[Dict[str, Any]] = []
-    failed: List[Dict[str, str]] = []
-    skipped: List[str] = []
+    try:
+        started_at = time.time()
+        succeeded: List[Dict[str, Any]] = []
+        failed: List[Dict[str, str]] = []
+        skipped: List[str] = []
 
-    total = len(requested_ids)
-    logger.info("Starting parquet sync for %d dataset(s)", total)
-
-    manifest = _build_manifest(
-        mode=_mode,
-        output_dir=out,
-        requested_ids=requested_ids,
-        succeeded=succeeded,
-        failed=failed,
-        skipped=skipped,
-        started_at=started_at,
-        status="in_progress",
-        current_dataset_id=None,
-    )
-    manifest_path = _write_manifest(out, manifest)
-
-    for index, dataset_id in enumerate(requested_ids, start=1):
-        label = f"[{index}/{total}]"
-        parquet_path = out / f"{dataset_id}.parquet"
+        total = len(requested_ids)
+        logger.info("Starting parquet sync for %d dataset(s)", total)
 
         manifest = _build_manifest(
             mode=_mode,
@@ -353,13 +422,14 @@ def download_datasets_parquet(
             skipped=skipped,
             started_at=started_at,
             status="in_progress",
-            current_dataset_id=dataset_id,
+            current_dataset_id=None,
         )
-        _write_manifest(out, manifest)
+        manifest_path = _write_manifest(out, manifest)
 
-        if resume and parquet_path.exists():
-            logger.info("%s %s -- exists, skipping", label, dataset_id)
-            skipped.append(dataset_id)
+        for index, dataset_id in enumerate(requested_ids, start=1):
+            label = f"[{index}/{total}]"
+            parquet_path = out / f"{dataset_id}.parquet"
+
             manifest = _build_manifest(
                 mode=_mode,
                 output_dir=out,
@@ -372,52 +442,85 @@ def download_datasets_parquet(
                 current_dataset_id=dataset_id,
             )
             _write_manifest(out, manifest)
-            continue
 
-        try:
-            if _should_stream_dataset_sync(dataset_id):
-                record = _download_large_dataset_to_parquet_with_retry(
-                    dataset_id,
-                    parquet_path=parquet_path,
-                    max_retries=max_retries,
-                    initial_backoff=initial_backoff,
-                    max_backoff=max_backoff,
+            if resume and parquet_path.exists():
+                logger.info("%s %s -- exists, skipping", label, dataset_id)
+                skipped.append(dataset_id)
+                manifest = _build_manifest(
+                    mode=_mode,
+                    output_dir=out,
+                    requested_ids=requested_ids,
+                    succeeded=succeeded,
+                    failed=failed,
+                    skipped=skipped,
+                    started_at=started_at,
+                    status="in_progress",
+                    current_dataset_id=dataset_id,
                 )
-            else:
-                df = _download_dataset_with_retry(
+                _write_manifest(out, manifest)
+                continue
+
+            try:
+                if _should_stream_dataset_sync(dataset_id):
+                    record = _download_large_dataset_to_parquet_with_retry(
+                        dataset_id,
+                        parquet_path=parquet_path,
+                        max_retries=max_retries,
+                        initial_backoff=initial_backoff,
+                        max_backoff=max_backoff,
+                    )
+                else:
+                    df = _download_dataset_with_retry(
+                        dataset_id,
+                        max_retries=max_retries,
+                        initial_backoff=initial_backoff,
+                        max_backoff=max_backoff,
+                    )
+                    try:
+                        df.to_parquet(parquet_path, index=False)
+                    except ImportError as exc:
+                        raise RuntimeError(
+                            "Parquet support requires 'pyarrow' or 'fastparquet'"
+                        ) from exc
+
+                    record = {
+                        "id": dataset_id,
+                        "rows": int(len(df)),
+                        "columns": int(len(df.columns)),
+                        "path": str(parquet_path),
+                        "sync_method": "dataframe",
+                    }
+
+                succeeded.append(record)
+                logger.info(
+                    "%s %s -- saved %d rows x %d cols (%s)",
+                    label,
                     dataset_id,
-                    max_retries=max_retries,
-                    initial_backoff=initial_backoff,
-                    max_backoff=max_backoff,
+                    record.get("rows", 0),
+                    record.get("columns", 0),
+                    record.get("sync_method", "unknown"),
                 )
-                try:
-                    df.to_parquet(parquet_path, index=False)
-                except ImportError as exc:
-                    raise RuntimeError(
-                        "Parquet support requires 'pyarrow' or 'fastparquet'"
-                    ) from exc
+            except Exception as exc:
+                logger.error("%s %s -- FAILED: %s", label, dataset_id, exc)
+                failed.append({"id": dataset_id, "reason": str(exc)})
 
-                record = {
-                    "id": dataset_id,
-                    "rows": int(len(df)),
-                    "columns": int(len(df.columns)),
-                    "path": str(parquet_path),
-                    "sync_method": "dataframe",
-                }
-
-            succeeded.append(record)
-            logger.info(
-                "%s %s -- saved %d rows x %d cols (%s)",
-                label,
-                dataset_id,
-                record.get("rows", 0),
-                record.get("columns", 0),
-                record.get("sync_method", "unknown"),
+            manifest = _build_manifest(
+                mode=_mode,
+                output_dir=out,
+                requested_ids=requested_ids,
+                succeeded=succeeded,
+                failed=failed,
+                skipped=skipped,
+                started_at=started_at,
+                status="in_progress",
+                current_dataset_id=dataset_id,
             )
-        except Exception as exc:
-            logger.error("%s %s -- FAILED: %s", label, dataset_id, exc)
-            failed.append({"id": dataset_id, "reason": str(exc)})
+            _write_manifest(out, manifest)
 
+            if delay > 0 and index < total:
+                time.sleep(delay)
+
+        elapsed_seconds = round(time.time() - started_at, 2)
         manifest = _build_manifest(
             mode=_mode,
             output_dir=out,
@@ -426,40 +529,25 @@ def download_datasets_parquet(
             failed=failed,
             skipped=skipped,
             started_at=started_at,
-            status="in_progress",
-            current_dataset_id=dataset_id,
+            status="completed",
+            current_dataset_id=None,
         )
-        _write_manifest(out, manifest)
+        manifest_path = _write_manifest(out, manifest)
 
-        if delay > 0 and index < total:
-            time.sleep(delay)
-
-    elapsed_seconds = round(time.time() - started_at, 2)
-    manifest = _build_manifest(
-        mode=_mode,
-        output_dir=out,
-        requested_ids=requested_ids,
-        succeeded=succeeded,
-        failed=failed,
-        skipped=skipped,
-        started_at=started_at,
-        status="completed",
-        current_dataset_id=None,
-    )
-    manifest_path = _write_manifest(out, manifest)
-
-    return {
-        "output_dir": str(out.resolve()),
-        "requested_count": total,
-        "succeeded_count": len(succeeded),
-        "failed_count": len(failed),
-        "skipped_count": len(skipped),
-        "succeeded": succeeded,
-        "failed": failed,
-        "skipped": skipped,
-        "elapsed_seconds": elapsed_seconds,
-        "manifest_path": str(manifest_path),
-    }
+        return {
+            "output_dir": str(out.resolve()),
+            "requested_count": total,
+            "succeeded_count": len(succeeded),
+            "failed_count": len(failed),
+            "skipped_count": len(skipped),
+            "succeeded": succeeded,
+            "failed": failed,
+            "skipped": skipped,
+            "elapsed_seconds": elapsed_seconds,
+            "manifest_path": str(manifest_path),
+        }
+    finally:
+        _release_sync_lock(lock_path, lock_token)
 
 
 def download_all_parquet(

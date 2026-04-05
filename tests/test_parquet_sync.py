@@ -1,6 +1,7 @@
 """Tests for parquet synchronization helpers."""
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -126,5 +127,46 @@ def test_download_datasets_parquet_streams_large_datasets(tmp_path, monkeypatch)
 
 
 def test_stream_retry_classifier_handles_empty_parse_error():
-    assert parquet_sync._is_retryable_stream_error(EmptyDataError("No columns to parse from file"))
-    assert parquet_sync._is_retryable_stream_error(RuntimeError("No columns to parse from file"))
+    assert parquet_sync._is_retryable_stream_error(
+        EmptyDataError("No columns to parse from file")
+    )
+    assert parquet_sync._is_retryable_stream_error(
+        RuntimeError("No columns to parse from file")
+    )
+
+
+def test_download_datasets_parquet_fails_when_lock_exists(tmp_path):
+    lock_path = tmp_path / parquet_sync.SYNC_LOCK_FILENAME
+    lock_path.write_text(
+        json.dumps({"pid": os.getpid(), "token": "existing", "started_at": "now"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="already running"):
+        parquet_sync.download_datasets_parquet(
+            dataset_ids=["cpih01"],
+            output_dir=str(tmp_path),
+            delay=0,
+        )
+
+
+def test_download_datasets_parquet_recovers_from_stale_lock(tmp_path, monkeypatch):
+    lock_path = tmp_path / parquet_sync.SYNC_LOCK_FILENAME
+    lock_path.write_text(
+        json.dumps({"pid": 999999, "token": "stale", "started_at": "old"}),
+        encoding="utf-8",
+    )
+
+    df = pd.DataFrame({"col": [1, 2]})
+    monkeypatch.setattr(parquet_sync, "_pid_is_alive", lambda pid: False)
+    monkeypatch.setattr(parquet_sync.core, "download_dataset", lambda dataset_id: df)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _fake_to_parquet)
+
+    summary = parquet_sync.download_datasets_parquet(
+        dataset_ids=["cpih01"],
+        output_dir=str(tmp_path),
+        delay=0,
+    )
+
+    assert summary["succeeded_count"] == 1
+    assert not lock_path.exists()

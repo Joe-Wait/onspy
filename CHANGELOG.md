@@ -5,6 +5,25 @@ All notable changes to the onspy package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-04-05
+
+### Fixed
+
+- Fixed intermittent `No such file or directory` rename failures in streaming
+  parquet sync by using unique temporary file names and robust cleanup.
+- Fixed mixed-type Arrow conversion failures (for example `soc` column in
+  `ashe-tables-3`) by normalizing streamed CSV chunks to a stable string dtype
+  before parquet writes.
+- Suppressed repeated pandas dtype warnings in the large-dataset stream path by
+  using deterministic chunk parsing options.
+
+### Added
+
+- Exclusive output-directory lock (`.onspy_parquet_sync.lock`) to prevent
+  concurrent parquet sync runs from clobbering each other in the same target
+  directory.
+- Lock conflict and stale-lock recovery coverage in parquet sync tests.
+
 ## [0.2.1] - 2026-04-05
 
 ### Added
