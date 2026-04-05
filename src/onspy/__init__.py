@@ -64,5 +64,5 @@ from .core import (
 from .parquet_sync import download_all_parquet, download_datasets_parquet
 from .boundaries import list_boundaries, download_boundary
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Joe Wait"

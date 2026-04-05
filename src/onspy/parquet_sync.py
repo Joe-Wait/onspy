@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from pandas.errors import EmptyDataError
 
 from . import core
 from .exceptions import ONSConnectionError, ONSRequestError
@@ -26,6 +29,8 @@ MAX_RETRIES = 5
 INITIAL_BACKOFF = 5.0
 MAX_BACKOFF = 120.0
 BACKOFF_MULTIPLIER = 2.0
+STREAM_CSV_CHUNK_ROWS = 50_000
+STREAM_DATASET_PREFIXES = ("ashe-", "TS", "RM", "ST")
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -43,6 +48,16 @@ def _is_retryable_error(exc: Exception) -> bool:
     if isinstance(exc, ONSRequestError):
         return exc.status_code in {429, 500, 502, 503, 504}
     return _is_rate_limit_error(exc)
+
+
+def _is_retryable_stream_error(exc: Exception) -> bool:
+    """Return True for transient stream/parse issues worth retrying."""
+    if _is_retryable_error(exc):
+        return True
+    if isinstance(exc, EmptyDataError):
+        return True
+    msg = str(exc).lower()
+    return "no columns to parse from file" in msg
 
 
 def _normalize_dataset_ids(dataset_ids: Iterable[str]) -> List[str]:
@@ -79,7 +94,7 @@ def _download_dataset_with_retry(
             return df
         except Exception as exc:
             is_last_attempt = attempt >= max_retries
-            is_retryable = _is_retryable_error(exc)
+            is_retryable = _is_retryable_stream_error(exc)
 
             if is_last_attempt or not is_retryable:
                 raise
@@ -99,6 +114,132 @@ def _download_dataset_with_retry(
 
     raise RuntimeError(
         f"Failed to download dataset '{dataset_id}' after {max_retries} retries"
+    )
+
+
+def _should_stream_dataset_sync(dataset_id: str) -> bool:
+    """Return True when dataset should be written via chunked CSV streaming."""
+    lowered = dataset_id.lower()
+    uppered = dataset_id.upper()
+    if lowered.startswith("ashe-"):
+        return True
+    return uppered.startswith(STREAM_DATASET_PREFIXES[1:])
+
+
+def _stream_csv_to_parquet(
+    csv_url: str,
+    parquet_path: Path,
+    chunk_rows: int = STREAM_CSV_CHUNK_ROWS,
+) -> tuple[int, int]:
+    """Stream a remote CSV into parquet without loading full data into memory."""
+    if not csv_url:
+        raise RuntimeError("Missing CSV URL for streaming parquet export")
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be >= 1")
+
+    tmp_path = parquet_path.with_name(f"{parquet_path.name}.tmp")
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    response = None
+    writer = None
+    total_rows = 0
+    total_columns = 0
+
+    try:
+        response = core.make_request(csv_url, stream=True)
+        response.raw.decode_content = True
+
+        reader = pd.read_csv(response.raw, chunksize=chunk_rows, low_memory=True)
+        for chunk in reader:
+            if chunk is None:
+                continue
+
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(
+                    str(tmp_path),
+                    table.schema,
+                    compression="zstd",
+                )
+                total_columns = int(table.num_columns)
+            elif table.schema != writer.schema:
+                table = table.cast(writer.schema, safe=False)
+
+            writer.write_table(table)
+            total_rows += int(len(chunk))
+
+        if writer is None or total_rows == 0:
+            raise RuntimeError("empty DataFrame")
+
+        writer.close()
+        writer = None
+        tmp_path.replace(parquet_path)
+        return total_rows, total_columns
+    except Exception:
+        if writer is not None:
+            writer.close()
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
+def _download_large_dataset_to_parquet_with_retry(
+    dataset_id: str,
+    parquet_path: Path,
+    max_retries: int,
+    initial_backoff: float,
+    max_backoff: float,
+) -> Dict[str, Any]:
+    """Download large CSV-backed datasets via chunked streaming and retries."""
+    backoff = initial_backoff
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            edition, version = core._resolve_edition_version(dataset_id)
+            definition = core._get_dataset_definition(dataset_id, edition, version)
+            csv_url = definition.get("downloads", {}).get("csv", {}).get("href", "")
+            if not csv_url:
+                raise RuntimeError("dataset does not expose CSV download")
+
+            rows, columns = _stream_csv_to_parquet(csv_url, parquet_path)
+            return {
+                "id": dataset_id,
+                "rows": rows,
+                "columns": columns,
+                "path": str(parquet_path),
+                "sync_method": "csv_stream",
+                "edition": edition,
+                "version": version,
+            }
+        except Exception as exc:
+            is_last_attempt = attempt >= max_retries
+            is_retryable = _is_retryable_error(exc)
+
+            if is_last_attempt or not is_retryable:
+                raise
+
+            jitter = backoff * random.uniform(-0.25, 0.25)
+            wait = min(backoff + jitter, max_backoff)
+            logger.warning(
+                "%s (stream) failed (%s). Retry %d/%d in %.1fs",
+                dataset_id,
+                exc,
+                attempt,
+                max_retries,
+                wait,
+            )
+            time.sleep(wait)
+            backoff = min(backoff * BACKOFF_MULTIPLIER, max_backoff)
+
+    raise RuntimeError(
+        f"Failed to stream dataset '{dataset_id}' after {max_retries} retries"
     )
 
 
@@ -234,33 +375,44 @@ def download_datasets_parquet(
             continue
 
         try:
-            df = _download_dataset_with_retry(
-                dataset_id,
-                max_retries=max_retries,
-                initial_backoff=initial_backoff,
-                max_backoff=max_backoff,
-            )
-            try:
-                df.to_parquet(parquet_path, index=False)
-            except ImportError as exc:
-                raise RuntimeError(
-                    "Parquet support requires 'pyarrow' or 'fastparquet'"
-                ) from exc
+            if _should_stream_dataset_sync(dataset_id):
+                record = _download_large_dataset_to_parquet_with_retry(
+                    dataset_id,
+                    parquet_path=parquet_path,
+                    max_retries=max_retries,
+                    initial_backoff=initial_backoff,
+                    max_backoff=max_backoff,
+                )
+            else:
+                df = _download_dataset_with_retry(
+                    dataset_id,
+                    max_retries=max_retries,
+                    initial_backoff=initial_backoff,
+                    max_backoff=max_backoff,
+                )
+                try:
+                    df.to_parquet(parquet_path, index=False)
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "Parquet support requires 'pyarrow' or 'fastparquet'"
+                    ) from exc
 
-            succeeded.append(
-                {
+                record = {
                     "id": dataset_id,
                     "rows": int(len(df)),
                     "columns": int(len(df.columns)),
                     "path": str(parquet_path),
+                    "sync_method": "dataframe",
                 }
-            )
+
+            succeeded.append(record)
             logger.info(
-                "%s %s -- saved %d rows x %d cols",
+                "%s %s -- saved %d rows x %d cols (%s)",
                 label,
                 dataset_id,
-                len(df),
-                len(df.columns),
+                record.get("rows", 0),
+                record.get("columns", 0),
+                record.get("sync_method", "unknown"),
             )
         except Exception as exc:
             logger.error("%s %s -- FAILED: %s", label, dataset_id, exc)

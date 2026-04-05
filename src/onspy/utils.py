@@ -12,6 +12,7 @@ from io import StringIO
 import logging
 
 from .client import default_client as client
+from .exceptions import ONSConnectionError, ONSRequestError
 logger = logging.getLogger(__name__)
 
 # Constants
@@ -165,35 +166,47 @@ def read_csv(url: str, **kwargs) -> pd.DataFrame:
     """
     logger.debug(f"Reading CSV from URL: {url}")
 
+    response = None
     try:
-        # Try using browser headers to download the CSV
-        if url:
-            headers = get_browser_headers()
+        if not url:
+            raise ValueError("CSV URL is required")
 
-            logger.debug(f"Using browser headers to get CSV: {url}")
+        headers = get_browser_headers()
+        logger.debug(f"Using browser headers to get CSV: {url}")
 
-            response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=30, stream=True)
+        if response.status_code != 200:
+            raise ONSRequestError(
+                f"CSV request failed for {url} (status {response.status_code})",
+                status_code=response.status_code,
+            )
 
-            if response.status_code == 200:
-                logger.debug(
-                    f"Successfully downloaded CSV (size: {len(response.content)})"
-                )
-                return pd.read_csv(StringIO(response.text), **kwargs)
-            else:
-                logger.debug(
-                    f"Failed to get CSV with status code: {response.status_code}"
-                )
-
-        # Fall back to standard pandas read_csv if the above approach fails
-        df = pd.read_csv(url, **kwargs)
+        stream = getattr(response, "raw", None)
+        if stream is not None:
+            try:
+                stream.decode_content = True
+            except Exception:
+                pass
+            df = pd.read_csv(stream, **kwargs)
+        else:
+            df = pd.read_csv(StringIO(response.text), **kwargs)
 
         logger.debug(f"CSV loaded successfully. Shape: {df.shape}")
-
         return df
+    except ONSRequestError:
+        raise
+    except requests.exceptions.RequestException as exc:
+        raise ONSConnectionError(f"Error reading CSV from {url}: {exc}") from exc
     except Exception as e:
         logger.error(f"Error reading CSV: {e}", exc_info=True)
         print(f"Error reading CSV: {e}")
         return pd.DataFrame()
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
 
 
 def cat_ratio(x: Dict[str, Any]) -> None:

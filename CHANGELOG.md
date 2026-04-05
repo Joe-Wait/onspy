@@ -5,6 +5,32 @@ All notable changes to the onspy package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-05
+
+### Added
+
+- Memory-safe streaming parquet export path for very large CSV-backed datasets
+  (`ashe-*`, `TS*`, `RM*`, `ST*`) with temp-file writes and atomic replace.
+- Sync metadata now records `sync_method` (`csv_stream` or `dataframe`) per
+  succeeded dataset in parquet sync summaries/manifests.
+- New client regression test to ensure streamed HTTP requests do not eagerly
+  read response bodies.
+
+### Changed
+
+- `ONSClient.make_request(..., stream=True)` no longer accesses
+  `response.content`, preserving true streaming behavior.
+- `utils.read_csv` now reads CSV responses from a stream and raises typed ONS
+  HTTP/network exceptions for failed CSV fetches.
+- Parquet sync retry classification now handles transient stream parsing
+  failures (for example, `No columns to parse from file`) as retryable.
+
+### Fixed
+
+- Fixed process OOM kills during `download_all_parquet` on very large datasets
+  by avoiding full in-memory DataFrame materialization in the large-dataset
+  sync path.
+
 ## [0.2.0] - 2026-04-02
 
 ### Added

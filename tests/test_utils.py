@@ -7,6 +7,7 @@ from unittest.mock import patch, Mock
 import pandas as pd
 import requests
 import json
+from io import BytesIO
 
 from onspy.utils import (
     null_coalesce,
@@ -164,7 +165,7 @@ class TestUtils(unittest.TestCase):
         """Test read_csv when the request is successful."""
         mock_response = Mock(status_code=200)
         mock_response.text = "id,value\n1,a\n2,b\n3,c"
-        mock_response.content = b"id,value\n1,a\n2,b\n3,c"
+        mock_response.raw = BytesIO(b"id,value\n1,a\n2,b\n3,c")
         mock_get.return_value = mock_response
 
         result = read_csv("https://api.example.com/data.csv")
@@ -182,6 +183,15 @@ class TestUtils(unittest.TestCase):
 
         self.assertIsInstance(result, pd.DataFrame)
         self.assertTrue(result.empty)
+
+    @patch("onspy.utils.requests.get")
+    def test_read_csv_http_error_raises(self, mock_get):
+        """Test read_csv raises ONSRequestError for non-200 responses."""
+        mock_response = Mock(status_code=429)
+        mock_get.return_value = mock_response
+
+        with self.assertRaises(ONSRequestError):
+            read_csv("https://api.example.com/data.csv")
 
     @patch("builtins.print")
     def test_cat_ratio(self, mock_print):

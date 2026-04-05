@@ -148,9 +148,14 @@ class ONSClient:
                 response.raise_for_status()
 
                 if response.status_code == 200:
-                    logger.debug(
-                        f"Request successful. Content length: {len(response.content)}"
-                    )
+                    if kwargs.get("stream", False):
+                        logger.debug(
+                            "Request successful (stream=True, response body not eagerly read)"
+                        )
+                    else:
+                        logger.debug(
+                            f"Request successful. Content length: {len(response.content)}"
+                        )
 
                 return response
 
