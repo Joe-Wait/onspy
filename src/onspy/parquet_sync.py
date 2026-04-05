@@ -36,6 +36,10 @@ STREAM_DATASET_PREFIXES = ("ashe-", "TS", "RM", "ST")
 SYNC_LOCK_FILENAME = ".onspy_parquet_sync.lock"
 
 
+class NonCompliantDatasetError(RuntimeError):
+    """Raised when a dataset cannot be synced due to unsupported source artifacts."""
+
+
 def _is_rate_limit_error(exc: Exception) -> bool:
     """Return True when an exception likely represents a 429 response."""
     if isinstance(exc, ONSRequestError) and exc.status_code == 429:
@@ -167,8 +171,12 @@ def _download_dataset_with_retry(
         try:
             df = core.download_dataset(dataset_id)
             if df.empty:
-                raise RuntimeError("empty DataFrame")
+                raise NonCompliantDatasetError(
+                    "empty DataFrame from source download"
+                )
             return df
+        except NonCompliantDatasetError:
+            raise
         except Exception as exc:
             is_last_attempt = attempt >= max_retries
             is_retryable = _is_retryable_error(exc)
@@ -254,12 +262,20 @@ def _stream_csv_to_parquet(
             total_rows += int(len(chunk))
 
         if writer is None or total_rows == 0:
-            raise RuntimeError("empty DataFrame")
+            raise NonCompliantDatasetError("empty DataFrame from streamed CSV")
 
         writer.close()
         writer = None
         tmp_path.replace(parquet_path)
         return total_rows, total_columns
+    except UnicodeDecodeError as exc:
+        if writer is not None:
+            writer.close()
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise NonCompliantDatasetError(
+            f"binary/non-text payload at CSV URL: {exc}"
+        ) from exc
     except Exception:
         if writer is not None:
             writer.close()
@@ -290,7 +306,7 @@ def _download_large_dataset_to_parquet_with_retry(
             definition = core._get_dataset_definition(dataset_id, edition, version)
             csv_url = definition.get("downloads", {}).get("csv", {}).get("href", "")
             if not csv_url:
-                raise RuntimeError("dataset does not expose CSV download")
+                raise NonCompliantDatasetError("dataset does not expose CSV download")
 
             rows, columns = _stream_csv_to_parquet(csv_url, parquet_path)
             return {
@@ -302,6 +318,8 @@ def _download_large_dataset_to_parquet_with_retry(
                 "edition": edition,
                 "version": version,
             }
+        except NonCompliantDatasetError:
+            raise
         except Exception as exc:
             is_last_attempt = attempt >= max_retries
             is_retryable = _is_retryable_stream_error(exc)
@@ -342,6 +360,7 @@ def _build_manifest(
     succeeded: List[Dict[str, Any]],
     failed: List[Dict[str, str]],
     skipped: List[str],
+    skipped_details: List[Dict[str, str]],
     started_at: float,
     status: str,
     current_dataset_id: str | None,
@@ -366,6 +385,7 @@ def _build_manifest(
         "succeeded": succeeded,
         "failed": failed,
         "skipped": skipped,
+        "skipped_details": skipped_details,
         "elapsed_seconds": elapsed_seconds,
     }
 
@@ -409,6 +429,7 @@ def download_datasets_parquet(
         succeeded: List[Dict[str, Any]] = []
         failed: List[Dict[str, str]] = []
         skipped: List[str] = []
+        skipped_details: List[Dict[str, str]] = []
 
         total = len(requested_ids)
         logger.info("Starting parquet sync for %d dataset(s)", total)
@@ -420,6 +441,7 @@ def download_datasets_parquet(
             succeeded=succeeded,
             failed=failed,
             skipped=skipped,
+            skipped_details=skipped_details,
             started_at=started_at,
             status="in_progress",
             current_dataset_id=None,
@@ -437,6 +459,7 @@ def download_datasets_parquet(
                 succeeded=succeeded,
                 failed=failed,
                 skipped=skipped,
+                skipped_details=skipped_details,
                 started_at=started_at,
                 status="in_progress",
                 current_dataset_id=dataset_id,
@@ -446,6 +469,13 @@ def download_datasets_parquet(
             if resume and parquet_path.exists():
                 logger.info("%s %s -- exists, skipping", label, dataset_id)
                 skipped.append(dataset_id)
+                skipped_details.append(
+                    {
+                        "id": dataset_id,
+                        "reason": "already exists (resume=true)",
+                        "skip_type": "resume",
+                    }
+                )
                 manifest = _build_manifest(
                     mode=_mode,
                     output_dir=out,
@@ -453,6 +483,7 @@ def download_datasets_parquet(
                     succeeded=succeeded,
                     failed=failed,
                     skipped=skipped,
+                    skipped_details=skipped_details,
                     started_at=started_at,
                     status="in_progress",
                     current_dataset_id=dataset_id,
@@ -500,6 +531,16 @@ def download_datasets_parquet(
                     record.get("columns", 0),
                     record.get("sync_method", "unknown"),
                 )
+            except NonCompliantDatasetError as exc:
+                logger.warning("%s %s -- SKIPPED: %s", label, dataset_id, exc)
+                skipped.append(dataset_id)
+                skipped_details.append(
+                    {
+                        "id": dataset_id,
+                        "reason": str(exc),
+                        "skip_type": "noncompliant",
+                    }
+                )
             except Exception as exc:
                 logger.error("%s %s -- FAILED: %s", label, dataset_id, exc)
                 failed.append({"id": dataset_id, "reason": str(exc)})
@@ -511,6 +552,7 @@ def download_datasets_parquet(
                 succeeded=succeeded,
                 failed=failed,
                 skipped=skipped,
+                skipped_details=skipped_details,
                 started_at=started_at,
                 status="in_progress",
                 current_dataset_id=dataset_id,
@@ -528,6 +570,7 @@ def download_datasets_parquet(
             succeeded=succeeded,
             failed=failed,
             skipped=skipped,
+            skipped_details=skipped_details,
             started_at=started_at,
             status="completed",
             current_dataset_id=None,
@@ -543,6 +586,7 @@ def download_datasets_parquet(
             "succeeded": succeeded,
             "failed": failed,
             "skipped": skipped,
+            "skipped_details": skipped_details,
             "elapsed_seconds": elapsed_seconds,
             "manifest_path": str(manifest_path),
         }

@@ -5,6 +5,20 @@ All notable changes to the onspy package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-04-06
+
+### Changed
+
+- Parquet sync now skips noncompliant datasets (instead of failing the run)
+  when source artifacts are missing or unusable (for example no CSV download,
+  empty tabular download, or binary/non-text payload at CSV URL).
+- Sync summaries/manifests now include `skipped_details` with per-dataset
+  reasons and skip type (`resume` or `noncompliant`).
+
+### Added
+
+- Additional parquet sync test coverage for noncompliant-dataset skip behavior.
+
 ## [0.2.2] - 2026-04-05
 
 ### Fixed
